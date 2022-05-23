@@ -7,15 +7,16 @@ import numpy as np
 import copy
 from matplotlib.patches import Rectangle
 import matplotlib.pyplot as plt
+from enum import Enum
+
 
 class ModelSynthesis():
 
     def __init__(self, example_model : Model, output_model_size : tuple):
         self.example_model = example_model
         # create empty output model
-        # output_model_size[1] columns and output_model_size[0] row
-        self.base_output_model = Model([[0 for i in range(output_model_size[1])] for j in range(output_model_size[0])])
-
+        # output_model_size[2] columns, output_model_size[1] row, output_model_size[0] depth
+        self.base_output_model = Model(np.zeros(output_model_size, int))
         self.print_model(self.base_output_model)
 
         # find max label number given by example model
@@ -24,8 +25,10 @@ class ModelSynthesis():
         self.valid_labels = [i for i in range(self.max_label+1)]
 
         # create transition function with every transition marked as not allowed (will be updated with values from example model)
-        self.transition_x = np.array([[0 for i in range(self.max_label+1)] for j in range(self.max_label+1)])
-        self.transition_y = np.array([[0 for i in range(self.max_label+1)] for j in range(self.max_label+1)])
+        self.transition_x = np.zeros((self.max_label+1, self.max_label+1), int)
+        self.transition_y = np.zeros((self.max_label+1, self.max_label+1), int)
+        self.transition_z = np.zeros((self.max_label+1, self.max_label+1), int)
+        # self.transition_z = np.array([[[0 for i in range(self.max_label+1)] for j in range(self.max_label+1)] for k in range(self.max_label+1)])
 
         print("Example model")
         self.print_model(example_model)
@@ -41,28 +44,45 @@ class ModelSynthesis():
         if horizontal_step_size + b_size > input_model.x_size:
             horizontal_step_size = 1
         horizontal_steps = int((input_model.x_size - b_size) / horizontal_step_size)
+        if horizontal_steps < 0: horizontal_steps = 0
 
         vertical_step_size = int(b_size / 2)     
         if vertical_step_size + b_size > input_model.y_size:
             vertical_step_size = 1
         vertical_steps = int((input_model.y_size - b_size) / vertical_step_size)
+        if vertical_steps < 0: vertical_steps = 0
+
+        depth_step_size = int(b_size / 2)     
+        if depth_step_size + b_size > input_model.z_size:
+            depth_step_size = 1
+        depth_steps = int((input_model.z_size - b_size) / depth_step_size)
+        if depth_steps < 0: depth_steps = 0
 
         # Careful: Both vertices counted from 0 (array indexing)
-        start_vertex = (input_model.y_size - b_size, 0)
-        end_vertex = (start_vertex[0] + b_size - 1, b_size - 1)
+        start_vertex = (0, input_model.y_size - b_size, 0)
+        end_vertex = (0, start_vertex[0] + b_size - 1, b_size - 1)
         
         working_model : Model = None
 
         # Synthesize with various B regions to ensure that every vertex is at least updated once
-        for j in range(horizontal_steps + 1):  
-            start_vertex = (input_model.y_size - b_size, j * horizontal_step_size)
-            end_vertex = (start_vertex[0] + b_size - 1, b_size - 1 + j * horizontal_step_size)
-            for i in range(vertical_steps + 1):
-                # Synthesize the model with B region defined by start vertex and end vertex
-                working_model = self.synthesize_with_b(input_model, start_vertex, end_vertex)
-                # update start and end vertex for next B region
-                start_vertex = (start_vertex[0] - vertical_step_size, start_vertex[1])
-                end_vertex = (end_vertex[0] - vertical_step_size, end_vertex[1])  
+       
+        # depth direction
+        for k in range(depth_steps + 1):  
+            start_vertex = (k * depth_step_size, input_model.y_size - b_size, 0)
+            end_vertex = (b_size - 1 + k * depth_step_size, start_vertex[1] + b_size - 1, b_size - 1)
+            
+            # column direction
+            for j in range(horizontal_steps + 1):  
+                start_vertex = (start_vertex[0], input_model.y_size - b_size, j * horizontal_step_size)
+                end_vertex = (end_vertex[0], start_vertex[1] + b_size - 1, b_size - 1 + j * horizontal_step_size)
+                
+                # row direction
+                for i in range(vertical_steps + 1):
+                    # Synthesize the model with B region defined by start vertex and end vertex
+                    working_model = self.synthesize_with_b(input_model, start_vertex, end_vertex)
+                    # update start and end vertex for next B region
+                    start_vertex = (start_vertex[0], start_vertex[1] - vertical_step_size, start_vertex[2])
+                    end_vertex = (end_vertex[0], end_vertex[1] - vertical_step_size, end_vertex[2])  
 
         if working_model:
             print("SUCCESS")
@@ -79,14 +99,14 @@ class ModelSynthesis():
             return None
 
         # init C(M)
-        c_model = CModel(working_model.model, self.valid_labels, (self.transition_x, self.transition_y), b_vertices)
+        c_model = CModel(working_model.model, self.valid_labels, (self.transition_z, self.transition_x, self.transition_y), b_vertices)
         # C(M) calculation with initial B (where all vertices are removed (=-1) in the B region)
-        c_model.update_c_model()
+        valid_c_model = c_model.update_c_model()
 
-        chosen_label, row, col = None, None, None
+        chosen_label, depth, row, col = None, None, None, None
         initial_update = True
         # store a copy of C(M) in case C(M) becomes inconsistent (then revert)
-        c_model.legacy_c_model = copy.deepcopy(c_model.c_model)
+        legacy_c_model = copy.deepcopy(c_model)
 
         # condition that B is not the empty set
         while(True):
@@ -95,13 +115,13 @@ class ModelSynthesis():
             print("C MODEL CONSISTENT? ")
             print(c_model_consistent)
             # condition that c model is not the empty set
-            if not c_model_consistent:
+            if not c_model_consistent or not valid_c_model:
                 print("MODEL INCONSISTENT --> Restoring legacy model")
                 # restore the legacy model
-                c_model.c_model = c_model.legacy_c_model
+                c_model = legacy_c_model
             
             elif not initial_update:
-                self.apply_changes(working_model, b_vertices, (row, col), chosen_label)
+                self.apply_changes(working_model, b_vertices, (depth, row, col), chosen_label)
                 # end the loop if all vertices of region B have been used
                 if working_model.check_model_complete() or not b_vertices:
                     break
@@ -110,15 +130,15 @@ class ModelSynthesis():
             initial_update = False
 
             # choose label from vertex of C(M), add this vertex to the working model (M) and update underlying c model accordingly
-            row, col = random.choice(b_vertices)
-            chosen_label = random.choice(c_model.c_model[row][col])           
+            depth, row, col = random.choice(b_vertices)
+            chosen_label = random.choice(c_model.c_model[depth][row][col])           
             c_model.legacy_c_model = copy.deepcopy(c_model.c_model)
-            c_model.c_model[row][col] = [chosen_label]
+            c_model.c_model[depth][row][col] = [chosen_label]
             # mark vertex as changed --> propagate changes with next C(M) update
-            c_model.u_t.append((row,col))    
+            c_model.u_t.append((depth,row,col))    
 
             # recalculate / update C(M)
-            c_model.update_c_model()
+            valid_c_model = c_model.update_c_model()
         
         return working_model
 
@@ -128,25 +148,36 @@ class ModelSynthesis():
         b_vertices.remove(vertex)
 
     def remove_b(self, model : Model, start_vertex, end_vertex):
-        max_row_index = len(self.base_output_model.model) - 1
-        max_col_index = len(self.base_output_model.model[0]) - 1
+        max_depth_index = len(self.base_output_model.model) - 1
+        max_row_index = len(self.base_output_model.model[0]) - 1
+        max_col_index = len(self.base_output_model.model[0][0]) - 1
+        
+        # check if depth from given vertices are valid
+        if start_vertex[0] < 0 or start_vertex[0] > max_depth_index or end_vertex[0] < 0 or end_vertex[0] > max_depth_index:
+            return None, None   
+
         # check if rows from given vertices are valid
-        if start_vertex[0] < 0 or start_vertex[0] > max_row_index or end_vertex[0] < 0 or end_vertex[0] > max_row_index:
+        if start_vertex[1] < 0 or start_vertex[1] > max_row_index or end_vertex[1] < 0 or end_vertex[1] > max_row_index:
             return None, None
         
         # check if columns from given vertices are valid
-        if start_vertex[1] < 0 or start_vertex[1] > max_col_index or end_vertex[1] < 0 or end_vertex[1] > max_col_index:
+        if start_vertex[2] < 0 or start_vertex[2] > max_col_index or end_vertex[2] < 0 or end_vertex[2] > max_col_index:
             return None, None
 
         b_vertices = []
-        for i in range(start_vertex[0], end_vertex[0]+1):
-            for j in range(start_vertex[1], end_vertex[1]+1):
-                b_vertices.append((i,j))
+        # find all vertices in B region
+        for k in range(start_vertex[0], end_vertex[0]+1):
+            for i in range(start_vertex[1], end_vertex[1]+1):
+                for j in range(start_vertex[2], end_vertex[2]+1):
+                    b_vertices.append((k, i, j))
 
-        for i, row in enumerate(model.model):
-            for j, col in enumerate(row):
-                if start_vertex[0] <= i <= end_vertex[0] and start_vertex[1] <= j <= end_vertex[1]:
-                    model.model[i,j] = -1
+        # set label of all vertices within B to -1
+        for k, depth_level in enumerate(model.model):
+            for i, row in enumerate(depth_level):
+                for j, col in enumerate(row):
+                    if start_vertex[0] <= k <= end_vertex[0] and start_vertex[1] <= i <= end_vertex[1] and start_vertex[2] <= j <= end_vertex[2]:
+                        model.model[k,i,j] = -1
+
         # return the model where all vertices in region B are removed (=-1) and all vertices of region B
         return model, b_vertices
 
@@ -187,48 +218,69 @@ class ModelSynthesis():
         for k1 in range(self.max_label+1):
             for k2 in range(self.max_label+1):
                 # check x direction
-                if(self.check_transition_in_model_direction(self.example_model, (k1, k2), False)):
+                
+                if(self.check_transition_in_model_direction(self.example_model, (k1, k2), 2)):
                     self.transition_x[k1, k2] = 1
                 # check y direction
-                if(self.check_transition_in_model_direction(self.example_model, (k1, k2), True)):
+                if(self.check_transition_in_model_direction(self.example_model, (k1, k2), 1)):
                     self.transition_y[k1, k2] = 1
+                # check z direction
+                if(self.check_transition_in_model_direction(self.example_model, (k1, k2), 0)):
+                    self.transition_z[k1, k2] = 1
 
         print("TRANSITIONS X")
         print(self.transition_x)
         print("TRANSITIONS Y")
         print(self.transition_y)
+        print("TRANSITIONS Z")
+        print(self.transition_z)
                 
-    def check_transition_in_model_direction(self, model : Model, transition : tuple, transpose = False):
-        # check for transition in direction (left to right or top to bottom)
+    def check_transition_in_model_direction(self, model : Model, transition : tuple, direction):
+        # direction can be 0,1,2 --> Z,Y,X direction
+    
+        # check for transition in direction (left to right or top to bottom or front to back)
         local_model = model.model
-        if transpose:
-            local_model = model.model.transpose()
+
+        # if z direction then rotate matrix around y axis by 90 degree
+        if direction == 0:
+            local_model = np.rot90(local_model, 1, (0,2))
 
         k1, k2 = transition
-        for i in range(local_model.shape[0]):
-            previous_value = -1
-            for j in range(local_model.shape[1]):
-                if previous_value == k1:
-                    if local_model[i, j] == k2:
-                        return True
-                    else:
-                        previous_value = -1
-                
-                if local_model[i, j] == k1:
-                    previous_value = k1
+        for depth_level in range(local_model.shape[0]):
+            # if x direction nothing has to change
+            table : np.ndarray = local_model[depth_level]
+            # if y direction then transpose table
+            if direction == 1:
+                table = table.transpose()
+
+            for row_index in range(local_model.shape[1]):
+                previous_value = -1
+                for col_index in range(local_model.shape[2]):
+                    if previous_value == k1:
+                        if table[row_index, col_index] == k2:
+                            return True
+                        else:
+                            previous_value = -1
+                    
+                    if table[row_index, col_index] == k1:
+                        previous_value = k1
     
         return False
 
     def plot_model(self, working_model : Model):
         # plot the 2D model with colored rectangles
-        color_list = ["black", "green", "blue", "yellow", "violet", "gray", "cyan", "white"]
-        fig = plt.figure()
-        ax = fig.add_subplot(111)
-        for row in range(working_model.y_size):
-            # row = working_model.y_size - 1 - inverse_row
-            for col in range(working_model.x_size):
-                rect = Rectangle((col, row + 1), 1, 1, color=color_list[working_model.model[working_model.y_size - 1 - row, col]])
-                ax.add_patch(rect)
+        color_list = ["black", "green", "blue", "yellow", "violet", "gray", "cyan", "brown"]
+
+        vertical_plot_number = int(working_model.z_size / 2)
+        horizontal_plot_number = working_model.z_size - vertical_plot_number
+        fig, axs = plt.subplots(vertical_plot_number, horizontal_plot_number)
+        axs = axs.ravel()
+        for i in range(working_model.z_size):
+            for row in range(working_model.y_size):
+                # row = working_model.y_size - 1 - inverse_row
+                for col in range(working_model.x_size):
+                    rect = Rectangle((col, row), 1, 1, color=color_list[working_model.model[i,working_model.y_size - 1 - row, col]])
+                    axs[i].add_patch(rect)
 
         plt.xlim([0, working_model.x_size])
         plt.ylim([0, working_model.y_size])
@@ -241,12 +293,27 @@ class ModelSynthesis():
 
 if __name__ == "__main__":
     example_model = [
-                        [0, 0, 0, 0],
-                        [0, 2, 3, 0],
-                        [0, 1, 0, 0],
-                        [0, 0, 0, 0]
+                        [
+                            [0, 0, 0, 0],
+                            [0, 2, 3, 0],
+                            [0, 1, 0, 0],
+                            [0, 0, 0, 0]
+                        ],
+                        [
+                            [0, 0, 0, 0],
+                            [0, 2, 3, 0],
+                            [0, 1, 0, 0],
+                            [0, 0, 0, 0]
+                        ],
+                        [
+                            [0, 0, 0, 0],
+                            [0, 2, 3, 0],
+                            [0, 1, 0, 0],
+                            [0, 0, 0, 0]
+                        ]
                     ]
     
     model = Model(example_model)
-    model_synthesis_object = ModelSynthesis(model, (8, 5))
+    # depth, rows, columns
+    model_synthesis_object = ModelSynthesis(model, (4, 8, 5))
     model_synthesis_object.run_synthesis()
