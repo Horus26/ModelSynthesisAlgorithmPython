@@ -271,17 +271,25 @@ class ModelSynthesis():
 
         vertical_plot_number = int(working_model.z_size / 2)
         horizontal_plot_number = working_model.z_size - vertical_plot_number
-        fig, axs = plt.subplots(vertical_plot_number, horizontal_plot_number)
-        axs = axs.ravel()
+        fig, axs = plt.subplots(vertical_plot_number, horizontal_plot_number, squeeze=False)
+
+        vertical_index = 0
+        horizontal_index = 0
         for i in range(working_model.z_size):
             for row in range(working_model.y_size):
                 # row = working_model.y_size - 1 - inverse_row
                 for col in range(working_model.x_size):
                     rect = Rectangle((col, row), 1, 1, color=color_list[working_model.model[i,working_model.y_size - 1 - row, col]])
-                    axs[i].add_patch(rect)
+                    axs[vertical_index][horizontal_index].add_patch(rect)
+                    axs[vertical_index, horizontal_index].set_title('Axis [{},{}]'.format(vertical_index, horizontal_index))
+                    axs[vertical_index][horizontal_index].set_xlim(0, working_model.x_size)
+                    axs[vertical_index][horizontal_index].set_ylim(0, working_model.y_size)
 
-        plt.xlim([0, working_model.x_size])
-        plt.ylim([0, working_model.y_size])
+            horizontal_index += 1
+            if horizontal_index == horizontal_plot_number:
+                horizontal_index = 0
+                vertical_index += 1
+
         plt.show()
 
     def print_model(self, model : Model):
