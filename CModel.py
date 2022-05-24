@@ -90,7 +90,7 @@ class CModel():
                     if label != -1:
                         self.c_model[depth_level][row][col] = [label]
 
-        print(self.c_model)
+        # print(self.c_model)
 
     def update_c_model(self):
         # # copy the current c model in case the propagation results in an inconsistent c model
@@ -100,7 +100,7 @@ class CModel():
                 return False
             if not self.propagate_c_model_changes():
                 return False
-            print("Remaining u_t: {}".format(self.u_t))
+            # print("Remaining u_t: {}".format(self.u_t))
         return True
 
 
@@ -112,7 +112,7 @@ class CModel():
         # remove selected vertex from u_t
         self.u_t.remove(vertex)
 
-        print("Propagating changes from vertex: {}".format(vertex))
+        # print("Propagating changes from vertex: {}".format(vertex))
         # propagate labels from this vertex in the directions: top, left, right, bottom
         possible_chosen_vertex_labels = self.c_model[depth_level][row][col]
 
@@ -202,7 +202,7 @@ class CModel():
                 return False
 
         print("CMODEL UPDATED")
-        self.print_model()
+        # self.print_model()
         return True
 
     def check_consistent(self):

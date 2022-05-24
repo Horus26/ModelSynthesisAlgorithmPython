@@ -12,6 +12,7 @@ class ModelSynthesis():
 
     def __init__(self, example_model : Model, output_model_size : tuple):
         self.example_model = example_model
+        self.output_model_size = output_model_size
         # create empty output model
         # output_model_size[2] columns, output_model_size[1] row, output_model_size[0] depth
         self.base_output_model = Model(np.zeros(output_model_size, int))
@@ -34,7 +35,7 @@ class ModelSynthesis():
         # calculate the transition function from the example model
         self.init_transition_function()
 
-    def run_synthesis(self, b_size = 4):       
+    def run_synthesis(self, b_size = 4, zero_padding = False):       
         # start with inputting the initial base output model (all zeros)
         input_model = self.base_output_model
 
@@ -63,7 +64,6 @@ class ModelSynthesis():
         working_model : Model = None
 
         # Synthesize with various B regions to ensure that every vertex is at least updated once
-       
         # depth direction
         for k in range(depth_steps + 1):  
             start_vertex = (k * depth_step_size, input_model.y_size - b_size, 0)
@@ -74,10 +74,25 @@ class ModelSynthesis():
                 start_vertex = (start_vertex[0], input_model.y_size - b_size, j * horizontal_step_size)
                 end_vertex = (end_vertex[0], start_vertex[1] + b_size - 1, b_size - 1 + j * horizontal_step_size)
                 
+                used_start_vertex = start_vertex
+                used_end_vertex = end_vertex
                 # row direction
                 for i in range(vertical_steps + 1):
+                    if zero_padding:
+                        used_start_vertex = list(start_vertex)
+                        for index, value in enumerate(used_start_vertex):
+                            if value == 0:
+                                used_start_vertex[index] = 1
+                        used_start_vertex = tuple(used_start_vertex)
+                        
+                        used_end_vertex = list(end_vertex)
+                        for index, value in enumerate(used_end_vertex):
+                            if value == self.output_model_size[index] - 1:
+                                used_end_vertex[index] = value - 1
+                        used_end_vertex = tuple(used_end_vertex)
+
                     # Synthesize the model with B region defined by start vertex and end vertex
-                    working_model = self.synthesize_with_b(input_model, start_vertex, end_vertex)
+                    working_model = self.synthesize_with_b(input_model, used_start_vertex, used_end_vertex)
                     # update start and end vertex for next B region
                     start_vertex = (start_vertex[0], start_vertex[1] - vertical_step_size, start_vertex[2])
                     end_vertex = (end_vertex[0], end_vertex[1] - vertical_step_size, end_vertex[2])  
@@ -269,8 +284,8 @@ class ModelSynthesis():
         # plot the 2D model with colored rectangles
         color_list = ["black", "green", "blue", "yellow", "violet", "gray", "cyan", "brown"]
 
-        vertical_plot_number = int(working_model.z_size / 2)
-        horizontal_plot_number = working_model.z_size - vertical_plot_number
+        horizontal_plot_number = int(working_model.z_size / 2)
+        vertical_plot_number = int(working_model.z_size / horizontal_plot_number) 
         fig, axs = plt.subplots(vertical_plot_number, horizontal_plot_number, squeeze=False)
 
         vertical_index = 0
@@ -280,10 +295,10 @@ class ModelSynthesis():
                 # row = working_model.y_size - 1 - inverse_row
                 for col in range(working_model.x_size):
                     rect = Rectangle((col, row), 1, 1, color=color_list[working_model.model[i,working_model.y_size - 1 - row, col]])
-                    axs[vertical_index][horizontal_index].add_patch(rect)
+                    axs[vertical_index, horizontal_index].add_patch(rect)
                     axs[vertical_index, horizontal_index].set_title('Axis [{},{}]'.format(vertical_index, horizontal_index))
-                    axs[vertical_index][horizontal_index].set_xlim(0, working_model.x_size)
-                    axs[vertical_index][horizontal_index].set_ylim(0, working_model.y_size)
+                    axs[vertical_index, horizontal_index].set_xlim(0, working_model.x_size)
+                    axs[vertical_index, horizontal_index].set_ylim(0, working_model.y_size)
 
             horizontal_index += 1
             if horizontal_index == horizontal_plot_number:
@@ -306,11 +321,23 @@ if __name__ == "__main__":
                             [0, 0, 0, 0]
                         ],
                         [
-                            [0, 0, 0, 0],
+                            [0, 2, 3, 0],
                             [0, 2, 3, 0],
                             [0, 1, 0, 0],
                             [0, 0, 0, 0]
                         ],
+                        [
+                            [1, 2, 3, 0],
+                            [0, 2, 3, 0],
+                            [0, 1, 0, 0],
+                            [0, 0, 0, 0]
+                        ],
+                        # [
+                        #     [1, 2, 3, 1],
+                        #     [0, 2, 3, 0],
+                        #     [0, 1, 0, 0],
+                        #     [1, 0, 0, 1]
+                        # ],
                         [
                             [0, 0, 0, 0],
                             [0, 2, 3, 0],
@@ -322,4 +349,4 @@ if __name__ == "__main__":
     model = Model(example_model)
     # depth, rows, columns
     model_synthesis_object = ModelSynthesis(model, (4, 8, 5))
-    model_synthesis_object.run_synthesis()
+    model_synthesis_object.run_synthesis(4, True)
