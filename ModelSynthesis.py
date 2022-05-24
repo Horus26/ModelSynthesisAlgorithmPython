@@ -7,8 +7,6 @@ import numpy as np
 import copy
 from matplotlib.patches import Rectangle
 import matplotlib.pyplot as plt
-from enum import Enum
-
 
 class ModelSynthesis():
 
