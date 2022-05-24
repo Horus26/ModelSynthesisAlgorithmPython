@@ -35,7 +35,7 @@ class ModelSynthesis():
         # calculate the transition function from the example model
         self.init_transition_function()
 
-    def run_synthesis(self, b_size = 4, zero_padding = False):       
+    def run_synthesis(self, b_size = 4, zero_padding = False, plot_model = False):       
         # start with inputting the initial base output model (all zeros)
         input_model = self.base_output_model
 
@@ -100,9 +100,12 @@ class ModelSynthesis():
         if working_model:
             print("SUCCESS")
             self.print_model(working_model)
-            self.plot_model(working_model)
+            if plot_model:
+                self.plot_model(working_model)
         else:
             print("Something went wrong. Check inputs")
+
+        return working_model
 
     def synthesize_with_b(self, input_model : Model, start_vertex, end_vertex):
         working_model : Model = None
@@ -349,4 +352,4 @@ if __name__ == "__main__":
     model = Model(example_model)
     # depth, rows, columns
     model_synthesis_object = ModelSynthesis(model, (4, 8, 5))
-    model_synthesis_object.run_synthesis(4, True)
+    model_synthesis_object.run_synthesis(4, True, False)
