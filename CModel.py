@@ -7,7 +7,7 @@ class CModel():
     # C(M) is the model M but with every possible/allowed label per vertex
     # therefore every vertex has a list of labels
     
-    def __init__(self, model_list, valid_label_list, transition_rules, b_vertices):
+    def __init__(self, model_list, valid_label_list, transition_rules, b_vertices, valid_boundary_labels):
         # B model part with neighbors
         self.incomplete_b_model = model_list
         if not isinstance(model_list, np.ndarray):
@@ -42,6 +42,7 @@ class CModel():
         # self.u_t = list(zip(valid_indices[0], valid_indices[1]))
         self._set_fixed_values_from_model_in_c_model()
         self._find_initial_changed_vertices(b_vertices)
+        self._use_boundary_constraints(valid_boundary_labels)
 
     def _find_initial_changed_vertices(self, b_vertices):
         # find all vertices outside of B (all values in B have -1)
@@ -91,6 +92,52 @@ class CModel():
                         self.c_model[depth_level][row][col] = [label]
 
         # print(self.c_model)
+
+    # apply boundary constraints to generate c model and therefore constrain possible labels on the boundaries
+    def _use_boundary_constraints(self, valid_boundary_labels : set):
+
+        for depth_level, depth_layer in enumerate(self.c_model):
+            # change top rows
+            for col_count, col_labels in enumerate(depth_layer[0]):
+                top_boundary_labels_set = set(col_labels)
+                intersection_set = valid_boundary_labels["top"].intersection(top_boundary_labels_set)
+                self.c_model[depth_level][0][col_count] = list(intersection_set)
+            # change bottom rows
+            for col_count, col_labels in enumerate(depth_layer[-1]):
+                bottom_boundary_labels_set = set(col_labels)
+                intersection_set = valid_boundary_labels["bottom"].intersection(bottom_boundary_labels_set)
+                self.c_model[depth_level][-1][col_count] = list(intersection_set)
+
+            # rotate depth_layer by 90 degree --> x axis becomes y axis
+            table = np.rot90(depth_layer)
+            # change left columns
+            for col_count, col_labels in enumerate(table[-1]):
+                left_boundary_labels_set = set(col_labels)
+                intersection_set = valid_boundary_labels["left"].intersection(left_boundary_labels_set)
+                table[-1][col_count] = list(intersection_set)
+            
+            # change right columns
+            for col_count, col_labels in enumerate(table[0]):
+                right_boundary_labels_set = set(col_labels)
+                intersection_set = valid_boundary_labels["right"].intersection(right_boundary_labels_set)
+                table[0][col_count] = list(intersection_set)
+
+            # write updated table / 2d matrix back to the c model
+            self.c_model[depth_level] = np.rot90(table, -1)
+
+        # change front matrix / plane
+        for row_count, row in enumerate(self.c_model[0]):
+            for col_count, col_labels in enumerate(row):
+                front_boundary_labels_set = set(col_labels)
+                intersection_set = valid_boundary_labels["front"].intersection(front_boundary_labels_set)
+                self.c_model[0][row_count][col_count] = list(intersection_set)
+        
+        # change back matrix / plane
+        for row_count, row in enumerate(self.c_model[-1]):
+            for col_count, col_labels in enumerate(row):
+                back_boundary_labels_set = set(col_labels)
+                intersection_set = valid_boundary_labels["back"].intersection(back_boundary_labels_set)
+                self.c_model[-1][row_count][col_count] = list(intersection_set)
 
     def update_c_model(self):
         # # copy the current c model in case the propagation results in an inconsistent c model

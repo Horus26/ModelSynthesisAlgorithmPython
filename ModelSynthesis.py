@@ -10,12 +10,21 @@ import matplotlib.pyplot as plt
 
 class ModelSynthesis():
 
-    def __init__(self, example_model : Model, output_model_size : tuple):
+    def __init__(self, example_model : Model, output_model_size : tuple, grow_from_initial_seed = False, base_mode_ground_layer = False):
         self.example_model = example_model
         self.output_model_size = output_model_size
+        self.grow_from_initial_seed = grow_from_initial_seed
         # create empty output model
         # output_model_size[2] columns, output_model_size[1] row, output_model_size[0] depth
         self.base_output_model = Model(np.zeros(output_model_size, int))
+        # change bottom rows of base output model to 1
+        if base_mode_ground_layer:
+            ones_row = np.ones((1, self.base_output_model.x_size), int)
+            for depth_level in range(self.base_output_model.z_size):
+                self.base_output_model.model[depth_level][-1] = ones_row
+
+
+
         self.print_model(self.base_output_model)
 
         # find max label number given by example model
@@ -34,7 +43,55 @@ class ModelSynthesis():
 
         # calculate the transition function from the example model
         self.init_transition_function()
+        self.valid_boundary_labels = self.find_boundary_constraints()
 
+    def find_boundary_constraints(self):
+        # find constraints for boundary of output model from the given example model
+        valid_boundary_labels = {
+            "bottom": [], 
+            "top":  [],
+            "left": [],
+            "right":[],
+            "front":[],
+            "back": [],
+            }
+
+        # handles top and bottom rows
+        # get all labels from the last/bottom row of every depth layer
+        valid_boundary_labels["bottom"] = set.union(*[set(tuple(depth_layer[-1])) for depth_layer in self.example_model.model])
+        # get all labels from the first/top row of every depth layer
+        valid_boundary_labels["top"] = set.union(*[set(tuple(depth_layer[0])) for depth_layer in self.example_model.model])
+        
+        # handle left and right columns
+        # rotate matrix so that the y-axes is the new x-axes
+        working_model = np.rot90(self.example_model.model, axes=(1, 2))
+        # get all labels from the first/left column of every depth layer (which is last row after rotation)
+        valid_boundary_labels["left"] = set.union(*[set(tuple(depth_layer[-1])) for depth_layer in working_model])
+        # get all labels from the last/right column of every depth layer (which is first row after rotation)
+        valid_boundary_labels["right"] = set.union(*[set(tuple(depth_layer[0])) for depth_layer in working_model])
+
+        # handle front and back planes
+        # get all labels from the front matrix / plane
+        valid_boundary_labels["front"] = set(self.example_model.model[0].flat)
+        # get all labels from the back matrix / plane
+        valid_boundary_labels["back"] = set(self.example_model.model[-1].flat) 
+        
+        return valid_boundary_labels
+
+    # wrapper method
+    def run(self, b_size = 4, zero_padding = False, plot_model = False):
+        number_of_attempts = 20
+        i = 0
+        while(i < number_of_attempts):
+            output_model = self.run_synthesis(b_size, zero_padding, plot_model)
+            if output_model: 
+                return output_model
+            i += 1
+            print("RESTARTING PROCESS")
+        
+        print("A consistent model could not be generated in time with given constraints. Try again")
+        return None
+    
     def run_synthesis(self, b_size = 4, zero_padding = False, plot_model = False):       
         # start with inputting the initial base output model (all zeros)
         input_model = self.base_output_model
@@ -93,6 +150,8 @@ class ModelSynthesis():
 
                     # Synthesize the model with B region defined by start vertex and end vertex
                     working_model = self.synthesize_with_b(input_model, used_start_vertex, used_end_vertex)
+                    if not working_model:
+                        return None
                     # update start and end vertex for next B region
                     start_vertex = (start_vertex[0], start_vertex[1] - vertical_step_size, start_vertex[2])
                     end_vertex = (end_vertex[0], end_vertex[1] - vertical_step_size, end_vertex[2])  
@@ -115,7 +174,7 @@ class ModelSynthesis():
             return None
 
         # init C(M)
-        c_model = CModel(working_model.model, self.valid_labels, (self.transition_z, self.transition_x, self.transition_y), b_vertices)
+        c_model = CModel(working_model.model, self.valid_labels, (self.transition_z, self.transition_x, self.transition_y), b_vertices, self.valid_boundary_labels)
         # C(M) calculation with initial B (where all vertices are removed (=-1) in the B region)
         valid_c_model = c_model.update_c_model()
 
@@ -146,8 +205,14 @@ class ModelSynthesis():
             initial_update = False
 
             # choose label from vertex of C(M), add this vertex to the working model (M) and update underlying c model accordingly
+            
             depth, row, col = random.choice(b_vertices)
-            chosen_label = random.choice(c_model.c_model[depth][row][col])           
+            valid_labels = c_model.c_model[depth][row][col]
+            # if there are no valid labels then even restoring with the legacy model does not help --> restart whole process
+            if not valid_labels:
+                return None
+
+            chosen_label = random.choice(valid_labels)           
             c_model.legacy_c_model = copy.deepcopy(c_model.c_model)
             c_model.c_model[depth][row][col] = [chosen_label]
             # mark vertex as changed --> propagate changes with next C(M) update
@@ -155,8 +220,38 @@ class ModelSynthesis():
 
             # recalculate / update C(M)
             valid_c_model = c_model.update_c_model()
+            # if chosen_label != 0 and self.grow_from_initial_seed:
+            #     self.grow_from_seed(b_vertices, c_model, (depth, row, col))
         
+        print("MODEL CONSISTENT: {}".format(self.check_model_consistent(working_model)))
         return working_model
+
+    def grow_from_seed(self, b_vertices, c_model : CModel, seed_vertex):
+        # grow from chosen seed with non zero labels wherever possible in adjacent neighborhood
+        (depth, row, col) = seed_vertex
+        seed_vertex_label = c_model.c_model[depth][row][col]
+        # below
+        v2 = tuple(np.add(seed_vertex, (0,1,0)))
+        (depth2, row2, col2) = v2
+        # check if v2 within boundaries
+        if v2[1] < c_model.y_size and v2 in b_vertices:
+            possible_labels = c_model.c_model[depth2][row2][col2]
+
+            valid_labels = []
+            # check if v2 is last element in column
+            if v2[1] == c_model.y_size - 1:
+                valid_labels = [label for label in possible_labels if label not in [0, seed_vertex_label]]
+            else:
+                valid_labels = [label for label in possible_labels if label not in [0]]
+            # assign a random label from valid labels
+            # check if not empty
+            if valid_labels:
+                chosen_label = random.choice(valid_labels)
+                c_model.c_model[depth2][row2][col2] = [chosen_label]
+                c_model.u_t.append(v2)
+                # b_vertices.remove(v2)
+
+        
 
     def apply_changes(self, working_model, b_vertices, vertex, label):
         working_model.model[vertex] = label
@@ -200,34 +295,49 @@ class ModelSynthesis():
     def check_model_consistent(self, model : Model):
         # check if the given model is consistent
         # consistent means that for every vertex the transition function with the given vertex and every surrounding vertex is 1
-
-        for y in range(model.y_size):
-            for x in range(model.x_size):
-                for y_2 in range(model.y_size):
-                    for x_2 in range(model.x_size):
-                        if self.check_transition_consistent(model, (y, x), (y_2, x_2)) == 0:
-                            print("MODEL INCONSISTENT")
-                            return False
+        for z in range(model.z_size):
+            for y in range(model.y_size):
+                for x in range(model.x_size):
+                    if not self.check_transition_consistent(model, (z, y, x)):
+                        print("MODEL INCONSISTENT")
+                        return False
 
         print("Model is consistent")
         return True
 
-    def check_transition_consistent(self, model : Model, v1, v2):
+    def check_transition_consistent(self, model : Model, v1):
         # check if given vertices (v1, v2) evaluate to true with the transition function
-        
         # check if v1 and v2 are adjacent
-        k1 = model.model[v1]
-        k2 = model.model[v2]
-        # if k1 is left and k2 is right
-        if np.array_equal(v1, np.add(v2,(1,0))): return self.transition_x[k1, k2]
-        # if k2 is left and k1 is right
-        if np.array_equal(v1, np.subtract(v2,(1,0))): return self.transition_x[k2, k1]
-        # if k1 is top and k2 is bottom
-        if  np.array_equal(v1, np.add(v2,(0,1))): return self.transition_y[k1, k2]
-        # if k2 is top and k1 is bottom
-        if np.array_equal(v1, np.subtract(v2,(0,1))): return self.transition_y[k2, k1]
+        # calculate v2 as adjacent vertex
+        # always only check in positive direction as checking in negative direction can be displayed as checking in positive direction
 
-        return 1
+        k1 = model.model[v1]
+
+        # check x direction
+        # check with vertex after v1 in x direction
+        v2 = tuple(np.add(v1, (0,0,1)))
+        if v2[2] < model.x_size:
+            k2 = model.model[v2]
+            if not self.transition_x[k1, k2]:
+                    return False
+
+        # check y direction
+        # check with vertex below v1 in y direction
+        v2 =  tuple(np.add(v1, (0,1,0)))
+        if v2[1] < model.y_size:
+            k2 = model.model[v2]
+            if not self.transition_y[k1, k2]:
+                    return False
+
+        # check z direction
+        # check with vertex behind v1 in z direction
+        v2 =  tuple(np.add(v1, (1,0,0)))
+        if v2[0] < model.z_size:
+            k2 = model.model[v2]
+            if not self.transition_z[k1, k2]:
+                    return False
+
+        return True
 
     def init_transition_function(self):
         # update transition function with given example model
@@ -262,16 +372,17 @@ class ModelSynthesis():
             local_model = np.rot90(local_model, 1, (0,2))
 
         k1, k2 = transition
+
         for depth_level in range(local_model.shape[0]):
             # if x direction nothing has to change
             table : np.ndarray = local_model[depth_level]
-            # if y direction then transpose table
+            # if y direction then rotate table by 90 degree --> x axis becomes y axis
             if direction == 1:
-                table = table.transpose()
+                table = np.rot90(table)
 
-            for row_index in range(local_model.shape[1]):
+            for row_index in range(table.shape[0]):
                 previous_value = -1
-                for col_index in range(local_model.shape[2]):
+                for col_index in range(table.shape[1]):
                     if previous_value == k1:
                         if table[row_index, col_index] == k2:
                             return True
@@ -285,7 +396,7 @@ class ModelSynthesis():
 
     def plot_model(self, working_model : Model):
         # plot the 2D model with colored rectangles
-        color_list = ["black", "green", "blue", "yellow", "violet", "gray", "cyan", "brown"]
+        color_list = ["black", "green", "blue", "yellow", "violet", "cyan", "gray", "brown"]
 
         horizontal_plot_number = int(working_model.z_size / 2)
         vertical_plot_number = int(working_model.z_size / horizontal_plot_number) 
@@ -316,26 +427,71 @@ class ModelSynthesis():
         print("Finished printing model")
 
 if __name__ == "__main__":
+    # example_model = [
+    #                     [
+    #                         [0, 0, 0, 0],
+    #                         [0, 2, 3, 0],
+    #                         [0, 1, 0, 0],
+    #                         [0, 0, 0, 0]
+    #                     ],
+    #                     [
+    #                         [0, 2, 3, 0],
+    #                         [0, 2, 3, 0],
+    #                         [0, 1, 0, 0],
+    #                         [0, 0, 0, 0]
+    #                     ],
+    #                     [
+    #                         [1, 2, 3, 0],
+    #                         [0, 2, 3, 0],
+    #                         [0, 1, 0, 0],
+    #                         [0, 0, 0, 0]
+    #                     ],
+    #                     # [
+    #                     #     [1, 2, 3, 1],
+    #                     #     [0, 2, 3, 0],
+    #                     #     [0, 1, 0, 0],
+    #                     #     [1, 0, 0, 1]
+    #                     # ],
+    #                     [
+    #                         [0, 0, 0, 0],
+    #                         [0, 2, 3, 0],
+    #                         [0, 1, 0, 0],
+    #                         [0, 0, 0, 0]
+    #                     ]
+    #                 ]
+    
+    # world like model with ground plane and basic structures
     example_model = [
                         [
                             [0, 0, 0, 0],
-                            [0, 2, 3, 0],
-                            [0, 1, 0, 0],
-                            [0, 0, 0, 0]
+                            [0, 0, 0, 0],
+                            [0, 0, 0, 0],
+                            [0, 0, 0, 0],
+                            [1, 1, 1, 1]
                         ],
                         [
-                            [0, 2, 3, 0],
-                            [0, 2, 3, 0],
-                            [0, 1, 0, 0],
-                            [0, 0, 0, 0]
+                            [0, 0, 0, 0],
+                            [0, 3, 0, 0],
+                            [5, 2, 0, 4],
+                            [0, 2, 0, 0],
+                            [1, 1, 1, 1]
                         ],
                         [
-                            [1, 2, 3, 0],
-                            [0, 2, 3, 0],
-                            [0, 1, 0, 0],
-                            [0, 0, 0, 0]
+                            [0, 0, 0, 0],
+                            [0, 3, 0, 0],
+                            [0, 2, 0, 0],
+                            [0, 2, 0, 0],
+                            [1, 1, 1, 1]
+                        ],
+                        [
+                            [0, 0, 0, 0],
+                            [0, 3, 0, 0],
+                            [0, 2, 0, 0],
+                            [0, 2, 0, 0],
+                            [1, 1, 1, 1]
                         ],
                         # [
+                        #     [0, 0, 0, 0],
                         #     [1, 2, 3, 1],
                         #     [0, 2, 3, 0],
                         #     [0, 1, 0, 0],
@@ -343,13 +499,14 @@ if __name__ == "__main__":
                         # ],
                         [
                             [0, 0, 0, 0],
-                            [0, 2, 3, 0],
-                            [0, 1, 0, 0],
-                            [0, 0, 0, 0]
+                            [0, 0, 0, 0],
+                            [0, 0, 0, 0],
+                            [0, 0, 0, 0],
+                            [1, 1, 1, 1]
                         ]
                     ]
-    
+
     model = Model(example_model)
     # depth, rows, columns
-    model_synthesis_object = ModelSynthesis(model, (4, 8, 5))
-    model_synthesis_object.run_synthesis(4, True, False)
+    model_synthesis_object = ModelSynthesis(model, (4, 8, 5), True, base_mode_ground_layer=True)
+    model_synthesis_object.run(4, zero_padding=False, plot_model=True)
