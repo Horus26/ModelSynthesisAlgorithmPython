@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 class ModelSynthesis():
 
-    def __init__(self, example_model : Model, output_model_size : tuple, grow_from_initial_seed = False, base_mode_ground_layer = False):
+    def __init__(self, example_model : Model, output_model_size : tuple, grow_from_initial_seed = False, base_mode_ground_layer_value :int = None, boundary_constraints_location={},apply_min_dimension_constraints = False):
         self.example_model = example_model
         self.output_model_size = output_model_size
         self.grow_from_initial_seed = grow_from_initial_seed
@@ -18,11 +18,11 @@ class ModelSynthesis():
         # output_model_size[2] columns, output_model_size[1] row, output_model_size[0] depth
         self.base_output_model = Model(np.zeros(output_model_size, int))
         # change bottom rows of base output model to 1
-        if base_mode_ground_layer:
-            ones_row = np.ones((1, self.base_output_model.x_size), int)
+        if base_mode_ground_layer_value:
+            ground_layer_row = np.full((1, self.base_output_model.x_size), base_mode_ground_layer_value, int)
+            # ones_row = np.ones((1, self.base_output_model.x_size), int)
             for depth_level in range(self.base_output_model.z_size):
-                self.base_output_model.model[depth_level][-1] = ones_row
-
+                self.base_output_model.model[depth_level][-1] = ground_layer_row
 
 
         self.print_model(self.base_output_model)
@@ -43,9 +43,14 @@ class ModelSynthesis():
 
         # calculate the transition function from the example model
         self.init_transition_function()
-        self.valid_boundary_labels = self.find_boundary_constraints()
+        self.valid_boundary_labels = None
+        if boundary_constraints_location:
+            self.valid_boundary_labels = self.find_boundary_constraints(boundary_constraints_location)
+        self.min_dimension_constraints = None
+        if apply_min_dimension_constraints:
+            self.min_dimension_constraints = self.find_min_dimension_constraints()
 
-    def find_boundary_constraints(self):
+    def find_boundary_constraints(self, boundary_constraints_location):
         # find constraints for boundary of output model from the given example model
         valid_boundary_labels = {
             "bottom": [], 
@@ -76,7 +81,94 @@ class ModelSynthesis():
         # get all labels from the back matrix / plane
         valid_boundary_labels["back"] = set(self.example_model.model[-1].flat) 
         
+        # reset valid boundary labels per location if needed
+        valid_labels_set = set(self.valid_labels)
+        if not boundary_constraints_location["top"]: valid_boundary_labels["top"] = valid_labels_set
+        if not boundary_constraints_location["bottom"]: valid_boundary_labels["bottom"] = valid_labels_set
+        if not boundary_constraints_location["left"]: valid_boundary_labels["left"] = valid_labels_set
+        if not boundary_constraints_location["right"]: valid_boundary_labels["right"] = valid_labels_set
+        if not boundary_constraints_location["front"]: valid_boundary_labels["front"] = valid_labels_set
+        if not boundary_constraints_location["back"]: valid_boundary_labels["back"] = valid_labels_set
+
+
         return valid_boundary_labels
+
+    def find_min_dimension_constraints(self):
+        # find minimum dimension constraints, e.g: there must always be at least three 2 in a row if there is a 2 in that row
+        # could be represented in the example model as: 0 2 2 0 0
+        # this example constraint would not be enforced with this model: 0 2 2 0 0\ 0 0 0 0 0\ 0 2 0 0 0
+        # find for every label in every direction the minimum amount of following labels with the same value
+        min_dimension_size_per_label = []
+        working_model = self.example_model.model
+
+        for label_value in range(self.max_label + 1):
+            min_dimension_size_per_label.append(
+                {
+                    "depth": 1, 
+                    "width":  1,
+                    "height": 1
+                }
+            )
+            # check for dimension constraints for every label
+            label_indices = np.argwhere(working_model == label_value)
+            # TODO: USE LABEL INDICES (given by depth, row, col indices in separate arrays) TO CHECK FOR CONSTRAINTS
+            sorted_indices_for_width = sorted(label_indices, key = lambda x: x[1])
+            sorted_indices_for_height = sorted(label_indices, key = lambda x: x[2])
+            sorted_indices_for_depth_layers = sorted(sorted_indices_for_width, key = lambda x: x[2])
+            # for vertex in label_indices:
+            #     pass
+
+            row_counter = 1
+            col_counter = 1
+            depth_counter = 1
+            last_max_count_row = 1
+            last_max_count_depth = 1
+            last_max_count_height = 1
+
+            for i in range(1, len(label_indices)):
+                
+                # handle row direction
+                previous_vertex = sorted_indices_for_width[i-1]
+                current_vertex = sorted_indices_for_width[i]
+
+                # check if adjacent within row
+                temp_vertex = np.add(previous_vertex, (0,0,1))
+                if np.array_equal(temp_vertex, current_vertex):
+                    row_counter += 1
+                else:
+                    row_counter = 1
+                if row_counter > last_max_count_row:
+                    last_max_count_row = row_counter
+
+                # handle depth direction
+                previous_vertex = sorted_indices_for_depth_layers[i-1]
+                current_vertex = sorted_indices_for_depth_layers[i]
+                # check if adjacent within depth layers
+                temp_vertex = np.add(previous_vertex, (1,0,0))
+                if np.array_equal(temp_vertex, current_vertex):
+                    depth_counter += 1
+                else:
+                    depth_counter = 1
+                if depth_counter > last_max_count_depth:
+                    last_max_count_depth = depth_counter
+
+                # handle height direction
+                previous_vertex = sorted_indices_for_height[i-1]
+                current_vertex = sorted_indices_for_height[i]
+                # check if adjacent within depth layers
+                temp_vertex = np.add(previous_vertex, (0,1,0))
+                if np.array_equal(temp_vertex, current_vertex):
+                    col_counter += 1
+                else:
+                    col_counter = 1
+                if col_counter > last_max_count_height:
+                        last_max_count_height = col_counter
+                
+                min_dimension_size_per_label[-1]["width"] = last_max_count_row
+                min_dimension_size_per_label[-1]["depth"] = last_max_count_depth
+                min_dimension_size_per_label[-1]["height"] = last_max_count_height
+
+        return min_dimension_size_per_label
 
     # wrapper method
     def run(self, b_size = 4, zero_padding = False, plot_model = False):
@@ -149,20 +241,28 @@ class ModelSynthesis():
                         used_end_vertex = tuple(used_end_vertex)
 
                     # Synthesize the model with B region defined by start vertex and end vertex
-                    working_model = self.synthesize_with_b(input_model, used_start_vertex, used_end_vertex)
+                    working_model = self.synthesize_with_b(copy.deepcopy(input_model), used_start_vertex, used_end_vertex)
                     if not working_model:
                         return None
+
+                    print("MODEL CONSISTENT: {}".format(self.check_model_consistent(working_model)))
+                    input_model = working_model
                     # update start and end vertex for next B region
                     start_vertex = (start_vertex[0], start_vertex[1] - vertical_step_size, start_vertex[2])
                     end_vertex = (end_vertex[0], end_vertex[1] - vertical_step_size, end_vertex[2])  
 
         if working_model:
-            print("SUCCESS")
+            print("Created a model")
             self.print_model(working_model)
+            model_consistent = self.check_model_consistent(working_model)
+            print("MODEL CONSISTENT: {}".format(model_consistent))
+            if not model_consistent:
+                return None
             if plot_model:
                 self.plot_model(working_model)
         else:
             print("Something went wrong. Check inputs")
+            return None
 
         return working_model
 
@@ -174,15 +274,21 @@ class ModelSynthesis():
             return None
 
         # init C(M)
-        c_model = CModel(working_model.model, self.valid_labels, (self.transition_z, self.transition_x, self.transition_y), b_vertices, self.valid_boundary_labels)
+        transition_rules = (self.transition_z, self.transition_x, self.transition_y)
+        c_model = CModel(working_model.model, self.valid_labels, transition_rules, copy.deepcopy(b_vertices), self.valid_boundary_labels)
         # C(M) calculation with initial B (where all vertices are removed (=-1) in the B region)
         valid_c_model = c_model.update_c_model()
+        # model is invalid if there are vertices with no label options
+        if not valid_c_model:
+            return None
 
         chosen_label, depth, row, col = None, None, None, None
         initial_update = True
         # store a copy of C(M) in case C(M) becomes inconsistent (then revert)
         legacy_c_model = copy.deepcopy(c_model)
 
+        chosen_invalid_vertex_and_labels = []
+        possible_vertex_and_label_combinations = []
         # condition that B is not the empty set
         while(True):
             # consistency check here because initial case must be also checked
@@ -193,10 +299,16 @@ class ModelSynthesis():
             if not c_model_consistent or not valid_c_model:
                 print("MODEL INCONSISTENT --> Restoring legacy model")
                 # restore the legacy model
+                # store the vertex label combination that made the model inconsistent^
+                if initial_update:
+                    return None
+
+                chosen_invalid_vertex_and_labels.append(((depth, row, col), chosen_label))
                 c_model = legacy_c_model
             
             elif not initial_update:
                 self.apply_changes(working_model, b_vertices, (depth, row, col), chosen_label)
+                chosen_invalid_vertex_and_labels.clear()
                 # end the loop if all vertices of region B have been used
                 if working_model.check_model_complete() or not b_vertices:
                     break
@@ -205,26 +317,142 @@ class ModelSynthesis():
             initial_update = False
 
             # choose label from vertex of C(M), add this vertex to the working model (M) and update underlying c model accordingly
-            
-            depth, row, col = random.choice(b_vertices)
-            valid_labels = c_model.c_model[depth][row][col]
+            c_model.legacy_c_model = copy.deepcopy(c_model.c_model)
+
+            # prev_vertex = copy.deepcopy((depth,row,col))
+            # prev_label = copy.deepcopy(chosen_label)
+            # temp = copy.deepcopy(possible_vertex_and_label_combinations)
+            possible_vertex_and_label_combinations = self.get_vertex_and_label_combinations(b_vertices, c_model)
             # if there are no valid labels then even restoring with the legacy model does not help --> restart whole process
-            if not valid_labels:
+            if possible_vertex_and_label_combinations is None or not possible_vertex_and_label_combinations:
+                return None
+            # vertex_and_label = self.choose_vertex_and_label_random(b_vertices, c_model.c_model)
+
+            # remove combinations that made the model inconsistent
+            # TODO: FIX BUG:list.remove(x): x not in list
+            for invalid_combination in chosen_invalid_vertex_and_labels:
+                possible_vertex_and_label_combinations.remove(invalid_combination)
+
+            # the list can be empty after removing invalid combinations
+            if not possible_vertex_and_label_combinations:
                 return None
 
-            chosen_label = random.choice(valid_labels)           
-            c_model.legacy_c_model = copy.deepcopy(c_model.c_model)
+            vertex_and_label = random.choice(possible_vertex_and_label_combinations)          
+            (depth, row, col), chosen_label = vertex_and_label
             c_model.c_model[depth][row][col] = [chosen_label]
             # mark vertex as changed --> propagate changes with next C(M) update
             c_model.u_t.append((depth,row,col))    
 
             # recalculate / update C(M)
             valid_c_model = c_model.update_c_model()
-            # if chosen_label != 0 and self.grow_from_initial_seed:
-            #     self.grow_from_seed(b_vertices, c_model, (depth, row, col))
+            if valid_c_model and chosen_label != 0 and self.min_dimension_constraints:
+                if self.apply_dim_constraints(c_model, (depth, row, col), chosen_label):
+                    valid_c_model = c_model.update_c_model()
+                else:
+                    # dimension constraints cant be satisfied --> restart process
+                    valid_c_model = False
         
-        print("MODEL CONSISTENT: {}".format(self.check_model_consistent(working_model)))
         return working_model
+
+    def get_vertex_and_label_combinations(self, b_vertices, c_model : CModel):
+        possible_combinations = []
+        
+        for vertex in b_vertices:
+            (depth, row, col) = vertex
+            valid_labels = c_model.c_model[depth][row][col]
+            # check if there exist valid labels (if not then vertex has no possible labels --> [])
+            if not valid_labels:
+                return None
+            for label in valid_labels:
+                possible_combinations.append(((depth, row, col), label))
+
+        return possible_combinations
+
+
+    def choose_vertex_and_label_random(self, b_vertices, c_model : CModel):
+        depth, row, col = random.choice(b_vertices)
+        valid_labels = c_model.c_model[depth][row][col]
+        if not valid_labels:
+            return None
+
+        chosen_label = random.choice(valid_labels) 
+        return (depth, row, col), chosen_label
+
+    def apply_dim_constraints(self, c_model : CModel, seed_vertex, label):
+        width_constraint = self.min_dimension_constraints[label]["width"]
+        height_constraint = self.min_dimension_constraints[label]["height"]
+        depth_constraint = self.min_dimension_constraints[label]["depth"]
+
+        if width_constraint > 1:
+            # check in x direction (to the right)
+            count_right_list = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,1))
+            count_left_list = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,-1))
+            # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
+            neighbor_vertex_sum = len(count_left_list) + len(count_right_list)
+            if  neighbor_vertex_sum == width_constraint: 
+                neighbor_vertex_list = []
+                if count_left_list: neighbor_vertex_list.append(count_left_list[0])
+                if count_right_list: neighbor_vertex_list.append(count_right_list[0])
+                chosen_neighbor = random.choice(neighbor_vertex_list)
+                (depth, row, col) = chosen_neighbor
+                c_model.c_model[depth][row][col] = [label]
+            elif neighbor_vertex_sum < width_constraint:
+                # constraint cant be satisfied --> failure
+                return False
+
+        if height_constraint > 1:
+            # check in y direction 
+            count_top_list = self.check_label_in_direction(c_model, seed_vertex, label, (0,-1,0))
+            count_bottom_list = self.check_label_in_direction(c_model, seed_vertex, label, (0,1,0))
+            # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
+            neighbor_vertex_sum = len(count_top_list) + len(count_bottom_list)
+            if  neighbor_vertex_sum == height_constraint: 
+                neighbor_vertex_list = []
+                if count_top_list: neighbor_vertex_list.append(count_top_list[0])
+                if count_bottom_list: neighbor_vertex_list.append(count_bottom_list[0])
+                chosen_neighbor = random.choice(neighbor_vertex_list)
+                (depth, row, col) = chosen_neighbor
+                c_model.c_model[depth][row][col] = [label]
+            elif neighbor_vertex_sum < height_constraint:
+                # constraint cant be satisfied --> failure
+                return False
+        
+        if depth_constraint > 1:
+            # check in y direction 
+            count_front_list = self.check_label_in_direction(c_model, seed_vertex, label, (-1,0,0))
+            count_back_list = self.check_label_in_direction(c_model, seed_vertex, label, (1,0,0))
+            # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
+            neighbor_vertex_sum = len(count_front_list) + len(count_back_list)
+            if  neighbor_vertex_sum == depth_constraint: 
+                neighbor_vertex_list = []
+                if count_front_list: neighbor_vertex_list.append(count_front_list[0])
+                if count_back_list: neighbor_vertex_list.append(count_back_list[0])
+                chosen_neighbor = random.choice(neighbor_vertex_list)
+                (depth, row, col) = chosen_neighbor
+                c_model.c_model[depth][row][col] = [label]
+
+            # adding this code part leads to many inconsistent models
+            # elif neighbor_vertex_sum < depth_constraint:
+            #     # constraint cant be satisfied --> failure
+            #     return False
+        
+        return True
+  
+    def check_label_in_direction(self, c_model : CModel, previous_vertex, previous_label, vertex_offset, count_vertex_list : list = None):
+        # vertex_offset defines the offset to the next vertex to check
+        if count_vertex_list is None:
+            count_vertex_list = []
+
+        (depth, row, col) = np.add(previous_vertex, vertex_offset)   
+        # check if next vertex is within the model
+        if any(first_value >= second_value or first_value < 0 for first_value, second_value in zip((depth, row, col), self.output_model_size)):
+            return count_vertex_list
+        
+        if previous_label in c_model.c_model[depth][row][col]:
+            count_vertex_list.append((depth, row, col))
+            return self.check_label_in_direction(c_model, (depth, row, col), previous_label, vertex_offset, count_vertex_list)
+        
+        return count_vertex_list
 
     def grow_from_seed(self, b_vertices, c_model : CModel, seed_vertex):
         # grow from chosen seed with non zero labels wherever possible in adjacent neighborhood
@@ -249,9 +477,7 @@ class ModelSynthesis():
                 chosen_label = random.choice(valid_labels)
                 c_model.c_model[depth2][row2][col2] = [chosen_label]
                 c_model.u_t.append(v2)
-                # b_vertices.remove(v2)
-
-        
+                # b_vertices.remove(v2)   
 
     def apply_changes(self, working_model, b_vertices, vertex, label):
         working_model.model[vertex] = label
@@ -467,28 +693,28 @@ if __name__ == "__main__":
                             [0, 0, 0, 0],
                             [0, 0, 0, 0],
                             [0, 0, 0, 0],
-                            [1, 1, 1, 1]
-                        ],
-                        [
-                            [0, 0, 0, 0],
-                            [0, 3, 0, 0],
-                            [5, 2, 0, 4],
-                            [0, 2, 0, 0],
-                            [1, 1, 1, 1]
+                            [4, 4, 4, 4]
                         ],
                         [
                             [0, 0, 0, 0],
                             [0, 3, 0, 0],
                             [0, 2, 0, 0],
                             [0, 2, 0, 0],
-                            [1, 1, 1, 1]
+                            [4, 4, 4, 4]
                         ],
                         [
                             [0, 0, 0, 0],
                             [0, 3, 0, 0],
                             [0, 2, 0, 0],
                             [0, 2, 0, 0],
-                            [1, 1, 1, 1]
+                            [4, 4, 4, 4]
+                        ],
+                        [
+                            [0, 0, 0, 0],
+                            [0, 3, 0, 0],
+                            [0, 2, 0, 0],
+                            [0, 2, 0, 0],
+                            [4, 4, 4, 4]
                         ],
                         # [
                         #     [0, 0, 0, 0],
@@ -502,11 +728,19 @@ if __name__ == "__main__":
                             [0, 0, 0, 0],
                             [0, 0, 0, 0],
                             [0, 0, 0, 0],
-                            [1, 1, 1, 1]
+                            [4, 4, 4, 4]
                         ]
                     ]
 
     model = Model(example_model)
+    boundary_constraints_location = {
+        "top": True,
+        "bottom": True,
+        "left": True,
+        "right": True,
+        "front": True,
+        "back": True
+    }
     # depth, rows, columns
-    model_synthesis_object = ModelSynthesis(model, (4, 8, 5), True, base_mode_ground_layer=True)
+    model_synthesis_object = ModelSynthesis(model, (6, 8, 5), grow_from_initial_seed=False, base_mode_ground_layer_value=4, boundary_constraints_location = boundary_constraints_location, apply_min_dimension_constraints = False)
     model_synthesis_object.run(4, zero_padding=False, plot_model=True)
