@@ -204,7 +204,7 @@ class CModel():
 
         # print("Propagating changes from vertex: {}".format(vertex))
         # propagate labels from this vertex in the directions: top, left, right, bottom
-        chosen_vertex_possible_labels = self.c_model[depth_level][row][col]
+        chosen_vertex_possible_labels = self.get_from_tuple(vertex)
 
         # case vertex to update is to the right
         if propagate_directions["right"] and col < len(self.c_model[0][0]) - 1:
@@ -314,3 +314,12 @@ class CModel():
     def get_from_tuple(self, vertex_tuple : tuple):
         depth, row, col = vertex_tuple
         return self.c_model[depth][row][col]
+
+    def set_with_tuple(self, vertex_tuple, insert_value):
+        depth, row, col = vertex_tuple
+        self.c_model[depth][row][col] = insert_value
+
+    def remove_with_tuple(self, vertex_tuple, label_to_remove):
+        depth, row, col = vertex_tuple
+        if label_to_remove in self.c_model[depth][row][col]:
+            self.c_model[depth][row][col].remove(label_to_remove)
