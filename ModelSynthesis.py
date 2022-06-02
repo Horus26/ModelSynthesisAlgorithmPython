@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 
 class ModelSynthesis():
 
-    def __init__(self, example_model : Model, output_model_size : tuple, grow_from_initial_seed = False, base_mode_ground_layer_value :int = None, boundary_constraints_location={},apply_min_dimension_constraints = False):
+    def __init__(self, example_model : Model, output_model_size : tuple, grow_from_initial_seed = False, base_mode_ground_layer_value :int = None, boundary_constraints_location={}, apply_min_dimension_constraints = False):
         self.example_model = example_model
         self.output_model_size = output_model_size
         self.grow_from_initial_seed = grow_from_initial_seed
@@ -211,48 +211,60 @@ class ModelSynthesis():
         end_vertex = (0, start_vertex[0] + b_size - 1, b_size - 1)
         
         working_model : Model = None
-
+        working_model_list = []
+        inconsistent_model_count = 0
         # Synthesize with various B regions to ensure that every vertex is at least updated once
         # depth direction
-        for k in range(depth_steps + 1):  
-            start_vertex = (k * depth_step_size, input_model.y_size - b_size, 0)
-            end_vertex = (b_size - 1 + k * depth_step_size, start_vertex[1] + b_size - 1, b_size - 1)
-            
-            # column direction
-            for j in range(horizontal_steps + 1):  
-                start_vertex = (start_vertex[0], input_model.y_size - b_size, j * horizontal_step_size)
-                end_vertex = (end_vertex[0], start_vertex[1] + b_size - 1, b_size - 1 + j * horizontal_step_size)
+    
+        # do the synthesize procedure with moving B over all of the model more than once
+        for iteration in range(3):
+            for k in range(depth_steps + 1):  
+                start_vertex = (k * depth_step_size, input_model.y_size - b_size, 0)
+                end_vertex = (b_size - 1 + k * depth_step_size, start_vertex[1] + b_size - 1, b_size - 1)
                 
-                used_start_vertex = start_vertex
-                used_end_vertex = end_vertex
-                # row direction
-                for i in range(vertical_steps + 1):
-                    if zero_padding:
-                        used_start_vertex = list(start_vertex)
-                        for index, value in enumerate(used_start_vertex):
-                            if value == 0:
-                                used_start_vertex[index] = 1
-                        used_start_vertex = tuple(used_start_vertex)
-                        
-                        used_end_vertex = list(end_vertex)
-                        for index, value in enumerate(used_end_vertex):
-                            if value == self.output_model_size[index] - 1:
-                                used_end_vertex[index] = value - 1
-                        used_end_vertex = tuple(used_end_vertex)
+                # column direction
+                for j in range(horizontal_steps + 1):  
+                    start_vertex = (start_vertex[0], input_model.y_size - b_size, j * horizontal_step_size)
+                    end_vertex = (end_vertex[0], start_vertex[1] + b_size - 1, b_size - 1 + j * horizontal_step_size)
+                    
+                    used_start_vertex = start_vertex
+                    used_end_vertex = end_vertex
+                    # row direction
+                    for i in range(vertical_steps + 1):
+                        if zero_padding:
+                            used_start_vertex = list(start_vertex)
+                            for index, value in enumerate(used_start_vertex):
+                                if value == 0:
+                                    used_start_vertex[index] = 1
+                            used_start_vertex = tuple(used_start_vertex)
+                            
+                            used_end_vertex = list(end_vertex)
+                            for index, value in enumerate(used_end_vertex):
+                                if value == self.output_model_size[index] - 1:
+                                    used_end_vertex[index] = value - 1
+                            used_end_vertex = tuple(used_end_vertex)
 
-                    # Synthesize the model with B region defined by start vertex and end vertex
-                    working_model = self.synthesize_with_b(copy.deepcopy(input_model), used_start_vertex, used_end_vertex)
-                    if not working_model:
-                        return None
+                        # Synthesize the model with B region defined by start vertex and end vertex
+                        input_model_copy = copy.deepcopy(input_model.model)
+                        working_model = self.synthesize_with_b(copy.deepcopy(input_model), used_start_vertex, used_end_vertex)
+                        if not working_model or not self.check_model_consistent(working_model):
+                            input_model.model = input_model_copy
+                            inconsistent_model_count += 1
+                            # return None
+                        else:
+                            input_model = working_model
+                            working_model_list.append(working_model)
+                            print("MODEL CONSISTENT: {}".format(self.check_model_consistent(working_model)))
 
-                    print("MODEL CONSISTENT: {}".format(self.check_model_consistent(working_model)))
-                    input_model = working_model
-                    # update start and end vertex for next B region
-                    start_vertex = (start_vertex[0], start_vertex[1] - vertical_step_size, start_vertex[2])
-                    end_vertex = (end_vertex[0], end_vertex[1] - vertical_step_size, end_vertex[2])  
+                        # update start and end vertex for next B region
+                        start_vertex = (start_vertex[0], start_vertex[1] - vertical_step_size, start_vertex[2])
+                        end_vertex = (end_vertex[0], end_vertex[1] - vertical_step_size, end_vertex[2])  
 
-        if working_model:
+        if working_model_list:
+            working_model = working_model_list[-1]
             print("Created a model")
+            print("There were {} model created that are valid".format(len(working_model_list)))
+            print("And {} models were inconsistent".format(inconsistent_model_count))
             self.print_model(working_model)
             model_consistent = self.check_model_consistent(working_model)
             print("MODEL CONSISTENT: {}".format(model_consistent))
@@ -288,7 +300,7 @@ class ModelSynthesis():
         legacy_c_model = copy.deepcopy(c_model)
 
         chosen_invalid_vertex_and_labels = []
-        possible_vertex_and_label_combinations = []
+        possible_vertex_and_label_combinations = self.get_vertex_and_label_combinations(b_vertices, c_model)
         # condition that B is not the empty set
         while(True):
             # consistency check here because initial case must be also checked
@@ -308,9 +320,11 @@ class ModelSynthesis():
             
             elif not initial_update:
                 self.apply_changes(working_model, b_vertices, (depth, row, col), chosen_label)
+                possible_vertex_and_label_combinations.clear()
+                possible_vertex_and_label_combinations = self.get_vertex_and_label_combinations(b_vertices, c_model)
                 chosen_invalid_vertex_and_labels.clear()
                 # end the loop if all vertices of region B have been used
-                if working_model.check_model_complete() or not b_vertices:
+                if working_model.check_model_complete() and not b_vertices:
                     break
             
             # mark initial case as over
@@ -322,16 +336,18 @@ class ModelSynthesis():
             # prev_vertex = copy.deepcopy((depth,row,col))
             # prev_label = copy.deepcopy(chosen_label)
             # temp = copy.deepcopy(possible_vertex_and_label_combinations)
-            possible_vertex_and_label_combinations = self.get_vertex_and_label_combinations(b_vertices, c_model)
+
             # if there are no valid labels then even restoring with the legacy model does not help --> restart whole process
             if possible_vertex_and_label_combinations is None or not possible_vertex_and_label_combinations:
                 return None
-            # vertex_and_label = self.choose_vertex_and_label_random(b_vertices, c_model.c_model)
 
             # remove combinations that made the model inconsistent
             # TODO: FIX BUG:list.remove(x): x not in list
-            for invalid_combination in chosen_invalid_vertex_and_labels:
-                possible_vertex_and_label_combinations.remove(invalid_combination)
+            if chosen_invalid_vertex_and_labels:
+                for invalid_combination in chosen_invalid_vertex_and_labels:
+                    # all invalid combinations will eventually be removed from possible_vertex_and_label_combinations but not from chosen_invalid_vertex_and_labels until changes are applied
+                    if invalid_combination in possible_vertex_and_label_combinations:
+                        possible_vertex_and_label_combinations.remove(invalid_combination)
 
             # the list can be empty after removing invalid combinations
             if not possible_vertex_and_label_combinations:
@@ -346,8 +362,26 @@ class ModelSynthesis():
             # recalculate / update C(M)
             valid_c_model = c_model.update_c_model()
             if valid_c_model and chosen_label != 0 and self.min_dimension_constraints:
-                if self.apply_dim_constraints(c_model, (depth, row, col), chosen_label):
-                    valid_c_model = c_model.update_c_model()
+                # apply dimension constraints
+                changed_vertices : set = self.apply_dim_constraints(c_model, (depth, row, col), chosen_label)
+                if changed_vertices is not None:
+                    while(changed_vertices):
+                        (chosen_depth, chosen_row, chosen_col) = changed_vertices.pop()
+                        chosen_changed_label = c_model.c_model[chosen_depth][chosen_row][chosen_col][0]
+                        new_changed_vertices : set = self.apply_dim_constraints(c_model, (chosen_depth, chosen_row, chosen_col), chosen_changed_label)
+                        c_model_copy = copy.deepcopy(c_model.c_model)
+                        valid_c_model = c_model.update_c_model()
+                        if not valid_c_model:
+                            c_model.c_model = c_model_copy
+                            c_model.c_model[chosen_depth][chosen_row][chosen_col].remove(chosen_changed_label)
+                            if not c_model.c_model[chosen_depth][chosen_row][chosen_col]:
+                                # a consistent model cannot be created
+                                return None 
+                        
+                        if new_changed_vertices:
+                            changed_vertices.update(new_changed_vertices)
+                        
+
                 else:
                     # dimension constraints cant be satisfied --> restart process
                     valid_c_model = False
@@ -378,81 +412,213 @@ class ModelSynthesis():
         chosen_label = random.choice(valid_labels) 
         return (depth, row, col), chosen_label
 
+
     def apply_dim_constraints(self, c_model : CModel, seed_vertex, label):
         width_constraint = self.min_dimension_constraints[label]["width"]
         height_constraint = self.min_dimension_constraints[label]["height"]
         depth_constraint = self.min_dimension_constraints[label]["depth"]
+        changed_vertices = set()
+
 
         if width_constraint > 1:
-            # check in x direction (to the right)
-            count_right_list = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,1))
-            count_left_list = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,-1))
+            # check in x direction (to the left and right)
+            count_right_list, fixed_labels_right = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,1))
+            count_left_list, fixed_labels_left = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,-1))
             # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
             neighbor_vertex_sum = len(count_left_list) + len(count_right_list)
-            if  neighbor_vertex_sum == width_constraint: 
-                neighbor_vertex_list = []
-                if count_left_list: neighbor_vertex_list.append(count_left_list[0])
-                if count_right_list: neighbor_vertex_list.append(count_right_list[0])
-                chosen_neighbor = random.choice(neighbor_vertex_list)
-                (depth, row, col) = chosen_neighbor
-                c_model.c_model[depth][row][col] = [label]
-            elif neighbor_vertex_sum < width_constraint:
-                # constraint cant be satisfied --> failure
-                return False
+            fixed_labels_sum = fixed_labels_left + fixed_labels_right
+            if neighbor_vertex_sum + 1 >= width_constraint: 
+                # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
+                if fixed_labels_sum + 1 < width_constraint or ((count_left_list and len(c_model.get_from_tuple(count_left_list[0])) > 1) or (count_right_list and len(c_model.get_from_tuple(count_right_list[0])) > 1)):
+                    neighbor_vertex_list = []
+
+                    # set as many labels as needed to ensure the constraint is fulfilled
+                    for i in range(width_constraint-1 - fixed_labels_sum):
+                        if i < 0:
+                            break
+
+                        # get adjacent vertices that have labels according to the constraint
+                        if count_left_list: neighbor_vertex_list.append(count_left_list[0])
+                        if count_right_list: neighbor_vertex_list.append(count_right_list[0]) 
+
+                        # check if there even exist vertices that can fullfil the constraint
+                        if neighbor_vertex_list:
+                            chosen_neighbor = random.choice(neighbor_vertex_list)
+                            (depth, row, col) = chosen_neighbor
+
+                            # if the chosen neighbor already contains only one element then it does not count
+                            if len(c_model.c_model[depth][row][col]) == 1:
+                                i -= 1
+                                continue
+                        
+                            c_model.c_model[depth][row][col] = [label]
+                            c_model.u_t.append(chosen_neighbor)
+                            changed_vertices.add(chosen_neighbor)
+                            # remove from correct side of vertex as the adjacent neighbors have changed
+                            if chosen_neighbor in count_left_list: count_left_list.remove(chosen_neighbor)
+                            else: count_right_list.remove(chosen_neighbor)
+                        else:
+                            # constraint cant be satisfied --> failure
+                            return None    
+            else:
+                    # constraint cant be satisfied --> failure
+                    return None                     
+
+
+            #     if count_left_list: neighbor_vertex_list.append(count_left_list[0])
+            #     if count_right_list: neighbor_vertex_list.append(count_right_list[0])
+            #     chosen_neighbor = random.choice(neighbor_vertex_list)
+            #     (depth, row, col) = chosen_neighbor
+            #     # vertex labels only need to be changed if there were more than 1 possible options before
+            #     # then also add this changed vertex to u_t 
+            #     # this also removes the option of altering border vertices of B
+            #     if len(c_model.c_model[depth][row][col]) > 1:
+            #         c_model.c_model[depth][row][col] = [label]
+            #         c_model.u_t.append(chosen_neighbor)
+            # elif neighbor_vertex_sum < width_constraint:
+            #     # constraint cant be satisfied --> failure
+            #     return False
 
         if height_constraint > 1:
             # check in y direction 
-            count_top_list = self.check_label_in_direction(c_model, seed_vertex, label, (0,-1,0))
-            count_bottom_list = self.check_label_in_direction(c_model, seed_vertex, label, (0,1,0))
+            count_top_list, fixed_labels_top = self.check_label_in_direction(c_model, seed_vertex, label, (0,-1,0))
+            count_bottom_list, fixed_labels_bottom = self.check_label_in_direction(c_model, seed_vertex, label, (0,1,0))
             # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
             neighbor_vertex_sum = len(count_top_list) + len(count_bottom_list)
-            if  neighbor_vertex_sum == height_constraint: 
-                neighbor_vertex_list = []
-                if count_top_list: neighbor_vertex_list.append(count_top_list[0])
-                if count_bottom_list: neighbor_vertex_list.append(count_bottom_list[0])
-                chosen_neighbor = random.choice(neighbor_vertex_list)
-                (depth, row, col) = chosen_neighbor
-                c_model.c_model[depth][row][col] = [label]
-            elif neighbor_vertex_sum < height_constraint:
-                # constraint cant be satisfied --> failure
-                return False
+            fixed_labels_sum = fixed_labels_bottom + fixed_labels_top
+            if neighbor_vertex_sum + 1 >= height_constraint: 
+                # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
+                if fixed_labels_sum + 1 < height_constraint or ((count_top_list and len(c_model.get_from_tuple(count_top_list[0])) > 1) or (count_bottom_list and len(c_model.get_from_tuple(count_bottom_list[0])) > 1)):
+                    neighbor_vertex_list = []
+                    
+                    # set as many labels as needed to ensure the constraint is fulfilled
+                    for i in range(height_constraint-1 - fixed_labels_sum):
+                        if i < 0:
+                            break
+
+                        # get adjacent vertices that have labels according to the constraint
+                        if count_top_list: neighbor_vertex_list.append(count_top_list[0])
+                        if count_bottom_list: neighbor_vertex_list.append(count_bottom_list[0]) 
+
+                        # check if there even exist vertices that can fullfil the constraint
+                        if neighbor_vertex_list:
+                            chosen_neighbor = random.choice(neighbor_vertex_list)
+                            (depth, row, col) = chosen_neighbor
+
+                            # if the chosen neighbor already contains only one element then it does not count
+                            if len(c_model.c_model[depth][row][col]) == 1:
+                                i -= 1
+                                continue
+                        
+                            c_model.c_model[depth][row][col] = [label]
+                            c_model.u_t.append(chosen_neighbor)
+                            changed_vertices.add(chosen_neighbor)
+                            # remove from correct side of vertex as the adjacent neighbors have changed
+                            if chosen_neighbor in count_top_list: count_top_list.remove(chosen_neighbor)
+                            else: count_bottom_list.remove(chosen_neighbor)
+                        else:
+                            # constraint cant be satisfied --> failure
+                            return None     
+            else:
+                    # constraint cant be satisfied --> failure
+                    return None                 
+                
+                
+                
+            #     if count_top_list: neighbor_vertex_list.append(count_top_list[0])
+            #     if count_bottom_list: neighbor_vertex_list.append(count_bottom_list[0])
+            #     chosen_neighbor = random.choice(neighbor_vertex_list)
+            #     (depth, row, col) = chosen_neighbor
+            #     # vertex labels only need to be changed if there were more than 1 possible options before
+            #     # then also add this changed vertex to u_t
+            #     # this also removes the option of altering border vertices of B 
+            #     if len(c_model.c_model[depth][row][col]) > 1:
+            #         c_model.c_model[depth][row][col] = [label]
+            #         c_model.u_t.append(chosen_neighbor)
+            # elif neighbor_vertex_sum < height_constraint:
+            #     # constraint cant be satisfied --> failure
+            #     return False
         
         if depth_constraint > 1:
             # check in y direction 
-            count_front_list = self.check_label_in_direction(c_model, seed_vertex, label, (-1,0,0))
-            count_back_list = self.check_label_in_direction(c_model, seed_vertex, label, (1,0,0))
+            count_front_list, fixed_labels_front = self.check_label_in_direction(c_model, seed_vertex, label, (-1,0,0))
+            count_back_list, fixed_labels_back = self.check_label_in_direction(c_model, seed_vertex, label, (1,0,0))
             # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
             neighbor_vertex_sum = len(count_front_list) + len(count_back_list)
-            if  neighbor_vertex_sum == depth_constraint: 
-                neighbor_vertex_list = []
-                if count_front_list: neighbor_vertex_list.append(count_front_list[0])
-                if count_back_list: neighbor_vertex_list.append(count_back_list[0])
-                chosen_neighbor = random.choice(neighbor_vertex_list)
-                (depth, row, col) = chosen_neighbor
-                c_model.c_model[depth][row][col] = [label]
+            fixed_labels_sum = fixed_labels_back + fixed_labels_front
+            if neighbor_vertex_sum + 1 >= depth_constraint: 
+                # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
+                if fixed_labels_sum + 1 < depth_constraint or ((count_front_list and len(c_model.get_from_tuple(count_front_list[0])) > 1) or (count_back_list and len(c_model.get_from_tuple(count_back_list[0])) > 1)):
+                    neighbor_vertex_list = []
+                
+                    # set as many labels as needed to ensure the constraint is fulfilled
+                    for i in range(depth_constraint-1 - fixed_labels_sum):
+                        if i < 0:
+                            break
 
-            # adding this code part leads to many inconsistent models
+                        # get adjacent vertices that have labels according to the constraint
+                        if count_front_list: neighbor_vertex_list.append(count_front_list[0])
+                        if count_back_list: neighbor_vertex_list.append(count_back_list[0]) 
+
+                        # check if there even exist vertices that can fullfil the constraint
+                        if neighbor_vertex_list:
+                            chosen_neighbor = random.choice(neighbor_vertex_list)
+                            (depth, row, col) = chosen_neighbor
+
+                            # if the chosen neighbor already contains only one element then it does not count
+                            if len(c_model.c_model[depth][row][col]) == 1:
+                                i -= 1
+                                continue
+                        
+                            c_model.c_model[depth][row][col] = [label]
+                            c_model.u_t.append(chosen_neighbor)
+                            changed_vertices.add(chosen_neighbor)
+                            # remove from correct side of vertex as the adjacent neighbors have changed
+                            if chosen_neighbor in count_front_list: count_front_list.remove(chosen_neighbor)
+                            else: count_back_list.remove(chosen_neighbor)
+                        else:
+                            # constraint cant be satisfied --> failure
+                            return None  
+            else:
+                    # constraint cant be satisfied --> failure
+                    return None                
+                
+                
+            #     if count_front_list: neighbor_vertex_list.append(count_front_list[0])
+            #     if count_back_list: neighbor_vertex_list.append(count_back_list[0])
+            #     chosen_neighbor = random.choice(neighbor_vertex_list)
+            #     (depth, row, col) = chosen_neighbor
+            #     # vertex labels only need to be changed if there were more than 1 possible options before
+            #     # then also add this changed vertex to u_t 
+            #     # this also removes the option of altering border vertices of B
+            #     if len(c_model.c_model[depth][row][col]) > 1:
+            #         c_model.c_model[depth][row][col] = [label]
+            #         c_model.u_t.append(chosen_neighbor)
+            # # adding this code part leads to many inconsistent models
             # elif neighbor_vertex_sum < depth_constraint:
             #     # constraint cant be satisfied --> failure
             #     return False
         
-        return True
+        return changed_vertices
   
-    def check_label_in_direction(self, c_model : CModel, previous_vertex, previous_label, vertex_offset, count_vertex_list : list = None):
+    def check_label_in_direction(self, c_model : CModel, previous_vertex, previous_label, vertex_offset, count_vertex_list : list = None, fixed_labels = 0):
         # vertex_offset defines the offset to the next vertex to check
         if count_vertex_list is None:
             count_vertex_list = []
+            fixed_labels = 0
 
         (depth, row, col) = np.add(previous_vertex, vertex_offset)   
         # check if next vertex is within the model
         if any(first_value >= second_value or first_value < 0 for first_value, second_value in zip((depth, row, col), self.output_model_size)):
-            return count_vertex_list
+            return count_vertex_list, fixed_labels
         
         if previous_label in c_model.c_model[depth][row][col]:
             count_vertex_list.append((depth, row, col))
-            return self.check_label_in_direction(c_model, (depth, row, col), previous_label, vertex_offset, count_vertex_list)
+            if len(c_model.c_model[depth][row][col]) == 1:
+                fixed_labels += 1
+            return self.check_label_in_direction(c_model, (depth, row, col), previous_label, vertex_offset, count_vertex_list, fixed_labels)
         
-        return count_vertex_list
+        return count_vertex_list, fixed_labels
 
     def grow_from_seed(self, b_vertices, c_model : CModel, seed_vertex):
         # grow from chosen seed with non zero labels wherever possible in adjacent neighborhood
@@ -697,23 +863,23 @@ if __name__ == "__main__":
                         ],
                         [
                             [0, 0, 0, 0],
-                            [0, 3, 0, 0],
-                            [0, 2, 0, 0],
-                            [0, 2, 0, 0],
+                            [0, 3, 3, 0],
+                            [0, 2, 2, 0],
+                            [0, 2, 2, 0],
                             [4, 4, 4, 4]
                         ],
                         [
                             [0, 0, 0, 0],
-                            [0, 3, 0, 0],
-                            [0, 2, 0, 0],
-                            [0, 2, 0, 0],
+                            [0, 3, 3, 0],
+                            [0, 2, 2, 0],
+                            [0, 2, 2, 0],
                             [4, 4, 4, 4]
                         ],
                         [
                             [0, 0, 0, 0],
-                            [0, 3, 0, 0],
-                            [0, 2, 0, 0],
-                            [0, 2, 0, 0],
+                            [0, 3, 3, 0],
+                            [0, 2, 2, 0],
+                            [0, 2, 2, 0],
                             [4, 4, 4, 4]
                         ],
                         # [
@@ -742,5 +908,5 @@ if __name__ == "__main__":
         "back": True
     }
     # depth, rows, columns
-    model_synthesis_object = ModelSynthesis(model, (6, 8, 5), grow_from_initial_seed=False, base_mode_ground_layer_value=4, boundary_constraints_location = boundary_constraints_location, apply_min_dimension_constraints = False)
+    model_synthesis_object = ModelSynthesis(model, (6, 8, 5), grow_from_initial_seed=False, base_mode_ground_layer_value=4, boundary_constraints_location = boundary_constraints_location, apply_min_dimension_constraints = True)
     model_synthesis_object.run(4, zero_padding=False, plot_model=True)

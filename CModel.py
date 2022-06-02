@@ -216,7 +216,6 @@ class CModel():
             if neighbor_labels_set != intersection_set:            
                 self.c_model[depth_level][row][col + 1] = list(intersection_set)
                 self.u_t.append((depth_level, row, col+1))
-
             # check if neighbor set is empty --> then stop 
             if not intersection_set:
                 return False
@@ -311,3 +310,7 @@ class CModel():
             for i, row_values in enumerate(depth_layer):
                 np_cmodel[k][i] = np.array(row_values)
         print(np_cmodel)
+
+    def get_from_tuple(self, vertex_tuple : tuple):
+        depth, row, col = vertex_tuple
+        return self.c_model[depth][row][col]
