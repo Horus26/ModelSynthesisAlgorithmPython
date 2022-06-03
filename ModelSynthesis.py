@@ -382,7 +382,6 @@ class ModelSynthesis():
                         if new_changed_vertices:
                             changed_vertices.update(new_changed_vertices)
                         
-
                 else:
                     # dimension constraints cant be satisfied --> restart process
                     valid_c_model = False
@@ -390,6 +389,7 @@ class ModelSynthesis():
         return working_model
 
     def get_vertex_and_label_combinations(self, b_vertices, c_model : CModel):
+        # find all combinations of given vertices with their respective possible labels (at vertex position in c model)
         possible_combinations = []
         
         for vertex in b_vertices:
@@ -402,7 +402,6 @@ class ModelSynthesis():
 
         return possible_combinations
 
-
     def choose_vertex_and_label_random(self, b_vertices, c_model : CModel):
         vertex = random.choice(b_vertices)
         valid_labels = c_model.get_from_tuple(vertex)
@@ -413,154 +412,274 @@ class ModelSynthesis():
         return vertex, chosen_label
 
 
+    def find_adjacent_vertices_with_dim_constraints(self, c_model, vertex, label, positive_offset):
+        # check for giving vertex if all dim constraints can be fulfilled
+        negative_offset = tuple([-value for value in positive_offset])
+        # get the counts in positive and negative direction
+        count_positive_list, fixed_labels_right = self.check_label_in_direction(c_model, vertex, label, positive_offset)
+        count_negative_list, fixed_labels_left = self.check_label_in_direction(c_model, vertex, label, negative_offset)
+        # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
+        fixed_labels_sum = fixed_labels_left + fixed_labels_right  
+
+        return (count_positive_list, count_negative_list), fixed_labels_sum
+
+    def check_dim_constraints_viable(self, c_model, vertex, label):
+        dim_constraints_viable = True
+
+        width_constraint = self.min_dimension_constraints[label]["width"]
+        height_constraint = self.min_dimension_constraints[label]["height"]
+        depth_constraint = self.min_dimension_constraints[label]["depth"]
+
+        # x direction
+        (count_positive_list, count_negative_list), fixed_labels_sum = self.find_adjacent_vertices_with_dim_constraints(c_model, vertex, label, (0,0,1))
+        neighbor_vertex_sum = len(count_negative_list) + len(count_positive_list)
+        if not (width_constraint >= 1 and neighbor_vertex_sum + 1 >= width_constraint):
+            dim_constraints_viable = False
+
+        # y direction
+        (count_positive_list, count_negative_list), fixed_labels_sum = self.find_adjacent_vertices_with_dim_constraints(c_model, vertex, label, (0,1,0))
+        neighbor_vertex_sum = len(count_negative_list) + len(count_positive_list)
+        if not (height_constraint >= 1 and neighbor_vertex_sum + 1 >= height_constraint):
+            dim_constraints_viable = False
+
+        # z direction
+        (count_positive_list, count_negative_list), fixed_labels_sum = self.find_adjacent_vertices_with_dim_constraints(c_model, vertex, label, (1,0,0))
+        neighbor_vertex_sum = len(count_negative_list) + len(count_positive_list)
+        if not (depth_constraint >= 1 and neighbor_vertex_sum + 1 >= depth_constraint):
+            dim_constraints_viable = False
+
+        return dim_constraints_viable
+
+    def apply_dim_constraint_in_direction(self, c_model : CModel, seed_vertex, label, direction_constraint, positive_offset):
+        changed_vertices = set()
+        
+        # if the constraint is 1 then it is already fulfilled by given vertex
+        if direction_constraint <= 1:
+            return changed_vertices
+
+        (count_positive_list, count_negative_list), fixed_labels_sum = self.find_adjacent_vertices_with_dim_constraints(c_model, seed_vertex, label, positive_offset)
+        # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
+        neighbor_vertex_sum = len(count_negative_list) + len(count_positive_list)
+        # fixed_labels_sum = fixed_labels_left + fixed_labels_right
+        if neighbor_vertex_sum + 1 >= direction_constraint: 
+            # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
+            if fixed_labels_sum + 1 < direction_constraint or ((count_negative_list and len(c_model.get_from_tuple(count_negative_list[0])) > 1) or (count_positive_list and len(c_model.get_from_tuple(count_positive_list[0])) > 1)):
+                neighbor_vertex_list = []
+
+                # set as many labels as needed to ensure the constraint is fulfilled
+                for i in range(direction_constraint-1 - fixed_labels_sum):
+                    if i < 0:
+                        break
+                    
+                    neighbor_vertex_list.clear()
+                    # get adjacent vertices that have labels according to the constraint
+                    if count_negative_list: neighbor_vertex_list.append(count_negative_list[0])
+                    if count_positive_list: neighbor_vertex_list.append(count_positive_list[0]) 
+
+                    # check if there even exist vertices that can fullfil the constraint
+                    if neighbor_vertex_list:
+                        chosen_neighbor = random.choice(neighbor_vertex_list)
+
+                        # if the chosen neighbor already contains only one element then it does not count
+                        if len(c_model.get_from_tuple(chosen_neighbor)) == 1:
+                            i -= 1
+                            continue
+                            
+                        previous_labels = c_model.get_from_tuple(chosen_neighbor)
+                        c_model.set_with_tuple(chosen_neighbor, [label])
+                        # check if c_model vertices around the chosen neighbor can fulfill min dimension constraint
+                        if self.check_dim_constraints_viable(c_model, chosen_neighbor, label):
+                            c_model.u_t.append(chosen_neighbor)
+                            changed_vertices.add(chosen_neighbor)
+                        else:
+                            # reset labels as min dimension constraint can not be fulfilled
+                            c_model.set_with_tuple(chosen_neighbor, previous_labels)
+                            i -= 1
+
+                        # remove from correct side of vertex as the adjacent neighbors have changed or the neighbor vertex led to problems with min dimension constraint
+                        if chosen_neighbor in count_negative_list: count_negative_list.remove(chosen_neighbor)
+                        else: count_positive_list.remove(chosen_neighbor)
+                    else:
+                        # constraint cant be satisfied --> failure
+                        return None    
+        else:
+                # constraint cant be satisfied --> failure
+                return None     
+
+        return changed_vertices         
+
     def apply_dim_constraints(self, c_model : CModel, seed_vertex, label):
         width_constraint = self.min_dimension_constraints[label]["width"]
         height_constraint = self.min_dimension_constraints[label]["height"]
         depth_constraint = self.min_dimension_constraints[label]["depth"]
         changed_vertices = set()
 
+        changed_vertices_width_direction = self.apply_dim_constraint_in_direction(c_model, seed_vertex, label, width_constraint, (0,0,1))
+        if changed_vertices_width_direction is None:
+            return None
+        changed_vertices.update(changed_vertices_width_direction)
 
-        if width_constraint > 1:
-            # check in x direction (to the left and right)
-            count_right_list, fixed_labels_right = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,1))
-            count_left_list, fixed_labels_left = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,-1))
-            # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
-            neighbor_vertex_sum = len(count_left_list) + len(count_right_list)
-            fixed_labels_sum = fixed_labels_left + fixed_labels_right
-            if neighbor_vertex_sum + 1 >= width_constraint: 
-                # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
-                if fixed_labels_sum + 1 < width_constraint or ((count_left_list and len(c_model.get_from_tuple(count_left_list[0])) > 1) or (count_right_list and len(c_model.get_from_tuple(count_right_list[0])) > 1)):
-                    neighbor_vertex_list = []
+        changed_vertices_height_direction = self.apply_dim_constraint_in_direction(c_model, seed_vertex, label, height_constraint, (0,1,0))
+        if changed_vertices_height_direction is None:
+            return None
+        changed_vertices.update(changed_vertices_height_direction)
 
-                    # set as many labels as needed to ensure the constraint is fulfilled
-                    for i in range(width_constraint-1 - fixed_labels_sum):
-                        if i < 0:
-                            break
+        changed_vertices_depth_direction = self.apply_dim_constraint_in_direction(c_model, seed_vertex, label, depth_constraint, (1,0,0))
+        if changed_vertices_depth_direction is None:
+            return None
+        changed_vertices.update(changed_vertices_depth_direction)
+        # if width_constraint > 1:
+        #     (count_right_list, count_left_list), fixed_labels_sum = self.find_adjacent_vertices_with_dim_constraints(c_model, seed_vertex, label, (0,0,1))
+        #     # check in x direction (to the left and right)
+        #     # count_right_list, fixed_labels_right = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,1))
+        #     # count_left_list, fixed_labels_left = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,-1))
+        #     # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
+        #     neighbor_vertex_sum = len(count_left_list) + len(count_right_list)
+        #     # fixed_labels_sum = fixed_labels_left + fixed_labels_right
+        #     if neighbor_vertex_sum + 1 >= width_constraint: 
+        #         # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
+        #         if fixed_labels_sum + 1 < width_constraint or ((count_left_list and len(c_model.get_from_tuple(count_left_list[0])) > 1) or (count_right_list and len(c_model.get_from_tuple(count_right_list[0])) > 1)):
+        #             neighbor_vertex_list = []
 
-                        # get adjacent vertices that have labels according to the constraint
-                        if count_left_list: neighbor_vertex_list.append(count_left_list[0])
-                        if count_right_list: neighbor_vertex_list.append(count_right_list[0]) 
+        #             # set as many labels as needed to ensure the constraint is fulfilled
+        #             for i in range(width_constraint-1 - fixed_labels_sum):
+        #                 if i < 0:
+        #                     break
 
-                        # check if there even exist vertices that can fullfil the constraint
-                        if neighbor_vertex_list:
-                            chosen_neighbor = random.choice(neighbor_vertex_list)
+        #                 # get adjacent vertices that have labels according to the constraint
+        #                 if count_left_list: neighbor_vertex_list.append(count_left_list[0])
+        #                 if count_right_list: neighbor_vertex_list.append(count_right_list[0]) 
 
-                            # if the chosen neighbor already contains only one element then it does not count
-                            if len(c_model.get_from_tuple(chosen_neighbor)) == 1:
-                                i -= 1
-                                continue
-                        
-                            c_model.set_with_tuple(chosen_neighbor, [label])
-                            c_model.u_t.append(chosen_neighbor)
-                            changed_vertices.add(chosen_neighbor)
-                            # remove from correct side of vertex as the adjacent neighbors have changed
-                            if chosen_neighbor in count_left_list: count_left_list.remove(chosen_neighbor)
-                            else: count_right_list.remove(chosen_neighbor)
-                        else:
-                            # constraint cant be satisfied --> failure
-                            return None    
-            else:
-                    # constraint cant be satisfied --> failure
-                    return None                     
+        #                 # check if there even exist vertices that can fullfil the constraint
+        #                 if neighbor_vertex_list:
+        #                     chosen_neighbor = random.choice(neighbor_vertex_list)
 
-        if height_constraint > 1:
-            # check in y direction 
-            count_top_list, fixed_labels_top = self.check_label_in_direction(c_model, seed_vertex, label, (0,-1,0))
-            count_bottom_list, fixed_labels_bottom = self.check_label_in_direction(c_model, seed_vertex, label, (0,1,0))
-            # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
-            neighbor_vertex_sum = len(count_top_list) + len(count_bottom_list)
-            fixed_labels_sum = fixed_labels_bottom + fixed_labels_top
-            if neighbor_vertex_sum + 1 >= height_constraint: 
-                # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
-                if fixed_labels_sum + 1 < height_constraint or ((count_top_list and len(c_model.get_from_tuple(count_top_list[0])) > 1) or (count_bottom_list and len(c_model.get_from_tuple(count_bottom_list[0])) > 1)):
-                    neighbor_vertex_list = []
+        #                     # if the chosen neighbor already contains only one element then it does not count
+        #                     if len(c_model.get_from_tuple(chosen_neighbor)) == 1:
+        #                         i -= 1
+        #                         continue
+                                
+        #                     previous_labels = c_model.get_from_tuple(chosen_neighbor)
+        #                     c_model.set_with_tuple(chosen_neighbor, [label])
+        #                     # check if c_model vertices around the chosen neighbor can fulfill min dimension constraint
+        #                     if self.check_dim_constraints_viable(c_model, chosen_neighbor, label):
+        #                         c_model.u_t.append(chosen_neighbor)
+        #                         changed_vertices.add(chosen_neighbor)
+        #                     else:
+        #                         # reset labels as min dimension constraint can not be fulfilled
+        #                         c_model.set_with_tuple(chosen_neighbor, previous_labels)
+        #                         i -= 1
+
+        #                     # remove from correct side of vertex as the adjacent neighbors have changed or the neighbor vertex led to problems with min dimension constraint
+        #                     if chosen_neighbor in count_left_list: count_left_list.remove(chosen_neighbor)
+        #                     else: count_right_list.remove(chosen_neighbor)
+        #                 else:
+        #                     # constraint cant be satisfied --> failure
+        #                     return None    
+        #     else:
+        #             # constraint cant be satisfied --> failure
+        #             return None                     
+
+        # if height_constraint > 1:
+        #     # check in y direction 
+        #     count_top_list, fixed_labels_top = self.check_label_in_direction(c_model, seed_vertex, label, (0,-1,0))
+        #     count_bottom_list, fixed_labels_bottom = self.check_label_in_direction(c_model, seed_vertex, label, (0,1,0))
+        #     # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
+        #     neighbor_vertex_sum = len(count_top_list) + len(count_bottom_list)
+        #     fixed_labels_sum = fixed_labels_bottom + fixed_labels_top
+        #     if neighbor_vertex_sum + 1 >= height_constraint: 
+        #         # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
+        #         if fixed_labels_sum + 1 < height_constraint or ((count_top_list and len(c_model.get_from_tuple(count_top_list[0])) > 1) or (count_bottom_list and len(c_model.get_from_tuple(count_bottom_list[0])) > 1)):
+        #             neighbor_vertex_list = []
                     
-                    # set as many labels as needed to ensure the constraint is fulfilled
-                    for i in range(height_constraint-1 - fixed_labels_sum):
-                        if i < 0:
-                            break
+        #             # set as many labels as needed to ensure the constraint is fulfilled
+        #             for i in range(height_constraint-1 - fixed_labels_sum):
+        #                 if i < 0:
+        #                     break
 
-                        # get adjacent vertices that have labels according to the constraint
-                        if count_top_list: neighbor_vertex_list.append(count_top_list[0])
-                        if count_bottom_list: neighbor_vertex_list.append(count_bottom_list[0]) 
+        #                 # get adjacent vertices that have labels according to the constraint
+        #                 if count_top_list: neighbor_vertex_list.append(count_top_list[0])
+        #                 if count_bottom_list: neighbor_vertex_list.append(count_bottom_list[0]) 
 
-                        # check if there even exist vertices that can fullfil the constraint
-                        if neighbor_vertex_list:
-                            chosen_neighbor = random.choice(neighbor_vertex_list)
+        #                 # check if there even exist vertices that can fullfil the constraint
+        #                 if neighbor_vertex_list:
+        #                     chosen_neighbor = random.choice(neighbor_vertex_list)
 
-                            # if the chosen neighbor already contains only one element then it does not count
-                            if len(c_model.get_from_tuple(chosen_neighbor)) == 1:
-                                i -= 1
-                                continue
+        #                     # if the chosen neighbor already contains only one element then it does not count
+        #                     if len(c_model.get_from_tuple(chosen_neighbor)) == 1:
+        #                         i -= 1
+        #                         continue
                         
-                            c_model.set_with_tuple(chosen_neighbor, [label])
-                            c_model.u_t.append(chosen_neighbor)
-                            changed_vertices.add(chosen_neighbor)
-                            # remove from correct side of vertex as the adjacent neighbors have changed
-                            if chosen_neighbor in count_top_list: count_top_list.remove(chosen_neighbor)
-                            else: count_bottom_list.remove(chosen_neighbor)
-                        else:
-                            # constraint cant be satisfied --> failure
-                            return None     
-            else:
-                    # constraint cant be satisfied --> failure
-                    return None                 
+        #                     c_model.set_with_tuple(chosen_neighbor, [label])
+        #                     c_model.u_t.append(chosen_neighbor)
+        #                     changed_vertices.add(chosen_neighbor)
+        #                     # remove from correct side of vertex as the adjacent neighbors have changed
+        #                     if chosen_neighbor in count_top_list: count_top_list.remove(chosen_neighbor)
+        #                     else: count_bottom_list.remove(chosen_neighbor)
+        #                 else:
+        #                     # constraint cant be satisfied --> failure
+        #                     return None     
+        #     else:
+        #             # constraint cant be satisfied --> failure
+        #             return None                 
                 
         
-        if depth_constraint > 1:
-            # check in y direction 
-            count_front_list, fixed_labels_front = self.check_label_in_direction(c_model, seed_vertex, label, (-1,0,0))
-            count_back_list, fixed_labels_back = self.check_label_in_direction(c_model, seed_vertex, label, (1,0,0))
-            # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
-            neighbor_vertex_sum = len(count_front_list) + len(count_back_list)
-            fixed_labels_sum = fixed_labels_back + fixed_labels_front
-            if neighbor_vertex_sum + 1 >= depth_constraint: 
-                # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
-                if fixed_labels_sum + 1 < depth_constraint or ((count_front_list and len(c_model.get_from_tuple(count_front_list[0])) > 1) or (count_back_list and len(c_model.get_from_tuple(count_back_list[0])) > 1)):
-                    neighbor_vertex_list = []
+        # if depth_constraint > 1:
+        #     # check in y direction 
+        #     count_front_list, fixed_labels_front = self.check_label_in_direction(c_model, seed_vertex, label, (-1,0,0))
+        #     count_back_list, fixed_labels_back = self.check_label_in_direction(c_model, seed_vertex, label, (1,0,0))
+        #     # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
+        #     neighbor_vertex_sum = len(count_front_list) + len(count_back_list)
+        #     fixed_labels_sum = fixed_labels_back + fixed_labels_front
+        #     if neighbor_vertex_sum + 1 >= depth_constraint: 
+        #         # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
+        #         if fixed_labels_sum + 1 < depth_constraint or ((count_front_list and len(c_model.get_from_tuple(count_front_list[0])) > 1) or (count_back_list and len(c_model.get_from_tuple(count_back_list[0])) > 1)):
+        #             neighbor_vertex_list = []
                 
-                    # set as many labels as needed to ensure the constraint is fulfilled
-                    for i in range(depth_constraint-1 - fixed_labels_sum):
-                        if i < 0:
-                            break
+        #             # set as many labels as needed to ensure the constraint is fulfilled
+        #             for i in range(depth_constraint-1 - fixed_labels_sum):
+        #                 if i < 0:
+        #                     break
 
-                        # get adjacent vertices that have labels according to the constraint
-                        if count_front_list: neighbor_vertex_list.append(count_front_list[0])
-                        if count_back_list: neighbor_vertex_list.append(count_back_list[0]) 
+        #                 # get adjacent vertices that have labels according to the constraint
+        #                 if count_front_list: neighbor_vertex_list.append(count_front_list[0])
+        #                 if count_back_list: neighbor_vertex_list.append(count_back_list[0]) 
 
-                        # check if there even exist vertices that can fullfil the constraint
-                        if neighbor_vertex_list:
-                            chosen_neighbor = random.choice(neighbor_vertex_list)
+        #                 # check if there even exist vertices that can fullfil the constraint
+        #                 if neighbor_vertex_list:
+        #                     chosen_neighbor = random.choice(neighbor_vertex_list)
 
-                            # if the chosen neighbor already contains only one element then it does not count
-                            if len(c_model.get_from_tuple(chosen_neighbor)) == 1:
-                                i -= 1
-                                continue
+        #                     # if the chosen neighbor already contains only one element then it does not count
+        #                     if len(c_model.get_from_tuple(chosen_neighbor)) == 1:
+        #                         i -= 1
+        #                         continue
                         
-                            c_model.set_with_tuple(chosen_neighbor, [label])
-                            c_model.u_t.append(chosen_neighbor)
-                            changed_vertices.add(chosen_neighbor)
-                            # remove from correct side of vertex as the adjacent neighbors have changed
-                            if chosen_neighbor in count_front_list: count_front_list.remove(chosen_neighbor)
-                            else: count_back_list.remove(chosen_neighbor)
-                        else:
-                            # constraint cant be satisfied --> failure
-                            return None  
-            else:
-                    # constraint cant be satisfied --> failure
-                    return None                
+        #                     c_model.set_with_tuple(chosen_neighbor, [label])
+        #                     c_model.u_t.append(chosen_neighbor)
+        #                     changed_vertices.add(chosen_neighbor)
+        #                     # remove from correct side of vertex as the adjacent neighbors have changed
+        #                     if chosen_neighbor in count_front_list: count_front_list.remove(chosen_neighbor)
+        #                     else: count_back_list.remove(chosen_neighbor)
+        #                 else:
+        #                     # constraint cant be satisfied --> failure
+        #                     return None  
+        #     else:
+        #             # constraint cant be satisfied --> failure
+        #             return None                
                         
         return changed_vertices
   
     def check_label_in_direction(self, c_model : CModel, previous_vertex, previous_label, vertex_offset, count_vertex_list : list = None, fixed_labels = 0):
+        # check how many labels can be theoretically set in the model in the given direction from previous vertex (recursive)
+        
         # vertex_offset defines the offset to the next vertex to check
         if count_vertex_list is None:
             count_vertex_list = []
             fixed_labels = 0
 
-        vertex = np.add(previous_vertex, vertex_offset)   
+        vertex = tuple(np.add(previous_vertex, vertex_offset))
         # check if next vertex is within the model
-        if any(first_value >= second_value or first_value < 0 for first_value, second_value in zip((depth, row, col), self.output_model_size)):
+        if any(first_value >= second_value or first_value < 0 for first_value, second_value in zip(vertex, self.output_model_size)):
             return count_vertex_list, fixed_labels
         
         if previous_label in c_model.get_from_tuple(vertex):
