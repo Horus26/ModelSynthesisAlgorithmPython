@@ -1,4 +1,5 @@
 import unittest
+from CModel import CModel
 from ModelSynthesis import ModelSynthesis
 from Model import Model
 import numpy as np
@@ -225,6 +226,28 @@ class ModelSynthesisTest(unittest.TestCase):
             self.assertEqual(dimension["width"], min_dimension_constraints[i]["width"])
             self.assertEqual(dimension["height"], min_dimension_constraints[i]["height"])
             self.assertEqual(dimension["depth"], min_dimension_constraints[i]["depth"])
+
+    # def test_check_min_dim_constraints_0_label(self):
+    #     example_model = [
+    #         [[0, 0, 0],
+    #         [0, 0, 0]],
+            
+    #         [[0, 1, 0],
+    #         [0, 1, 0]],
+            
+    #         [[0, 1, 0],
+    #         [0, 1, 0]],
+
+    #         [[0, 0, 0],
+    #         [0, 0, 0]],
+    #     ]
+
+    #     model = Model(example_model)
+    #     model_synthesis_object = ModelSynthesis(model, (6,1, 3))
+    #     transition_rules = (model_synthesis_object.transition_z, model_synthesis_object.transition_x, model_synthesis_object.transition_y)
+    #     c_model = CModel(model.model, [0,1], transition_rules, set_fixed_values=False)
+    #     # TODO: FINISH METHOD
+
 
 if __name__ == '__main__':
     unittest.main()

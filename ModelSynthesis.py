@@ -172,11 +172,18 @@ class ModelSynthesis():
 
     # wrapper method
     def run(self, b_size = 4, zero_padding = False, plot_model = False):
+        # in case of plot model the given output depth must be even
+        if plot_model and self.output_model_size[0] % 2:
+            print("As plot model was true the output model size in depth direction must be even")
+            return None
+        
         number_of_attempts = 20
         i = 0
         while(i < number_of_attempts):
+            print("Trying Synthesis ({}/{})".format(i, number_of_attempts))
             output_model = self.run_synthesis(b_size, zero_padding, plot_model)
             if output_model: 
+                print("A working model was found!")
                 return output_model
             i += 1
             print("RESTARTING PROCESS")
@@ -213,11 +220,19 @@ class ModelSynthesis():
         working_model : Model = None
         working_model_list = []
         inconsistent_model_count = 0
-        # Synthesize with various B regions to ensure that every vertex is at least updated once
-        # depth direction
-    
+
+        # check if given b size is too large for output model with given size
+        if any([b_size >= x for x in (input_model.z_size, input_model.y_size, input_model.y_size)]):
+            print("The B region size is too large compared to the output model size")
+            return None
+
+        # Synthesize with various B regions to ensure that every vertex is at least updated once    
         # do the synthesize procedure with moving B over all of the model more than once
-        for iteration in range(3):
+        max_repetitions = 3
+        # +1 because the initial position is not respected within the various step sizes
+        max_b_movements = max_repetitions * (depth_step_size+1) * (horizontal_step_size+1) * (vertical_step_size+1)
+        iteration = 1
+        for repetition in range(max_repetitions):
             for k in range(depth_steps + 1):  
                 start_vertex = (k * depth_step_size, input_model.y_size - b_size, 0)
                 end_vertex = (b_size - 1 + k * depth_step_size, start_vertex[1] + b_size - 1, b_size - 1)
@@ -244,6 +259,8 @@ class ModelSynthesis():
                                     used_end_vertex[index] = value - 1
                             used_end_vertex = tuple(used_end_vertex)
 
+                        print("B was moved: Iteration ({}/{})".format(iteration, max_b_movements))
+                        iteration += 1
                         # Synthesize the model with B region defined by start vertex and end vertex
                         input_model_copy = copy.deepcopy(input_model.model)
                         working_model = self.synthesize_with_b(copy.deepcopy(input_model), used_start_vertex, used_end_vertex)
@@ -254,7 +271,7 @@ class ModelSynthesis():
                         else:
                             input_model = working_model
                             working_model_list.append(working_model)
-                            print("MODEL CONSISTENT: {}".format(self.check_model_consistent(working_model)))
+                            # print("MODEL CONSISTENT: {}".format(self.check_model_consistent(working_model)))
 
                         # update start and end vertex for next B region
                         start_vertex = (start_vertex[0], start_vertex[1] - vertical_step_size, start_vertex[2])
@@ -294,32 +311,29 @@ class ModelSynthesis():
         if not valid_c_model:
             return None
 
-        chosen_label, depth, row, col = None, None, None, None
+        chosen_label, chosen_vertex = None, None
         initial_update = True
         # store a copy of C(M) in case C(M) becomes inconsistent (then revert)
         legacy_c_model = copy.deepcopy(c_model)
 
         chosen_invalid_vertex_and_labels = []
         possible_vertex_and_label_combinations = self.get_vertex_and_label_combinations(b_vertices, c_model)
+        c_model_consistent = c_model.check_consistent()
         # condition that B is not the empty set
         while(True):
-            # consistency check here because initial case must be also checked
-            c_model_consistent = c_model.check_consistent()
-            print("C MODEL CONSISTENT? ")
-            print(c_model_consistent)
             # condition that c model is not the empty set
             if not c_model_consistent or not valid_c_model:
-                print("MODEL INCONSISTENT --> Restoring legacy model")
+                # print("MODEL INCONSISTENT --> Restoring legacy model")
                 # restore the legacy model
                 # store the vertex label combination that made the model inconsistent^
                 if initial_update:
                     return None
 
-                chosen_invalid_vertex_and_labels.append(((depth, row, col), chosen_label))
+                chosen_invalid_vertex_and_labels.append((chosen_vertex, chosen_label))
                 c_model = legacy_c_model
             
             elif not initial_update:
-                self.apply_changes(working_model, b_vertices, (depth, row, col), chosen_label)
+                self.apply_changes(working_model, b_vertices, chosen_vertex, chosen_label)
                 possible_vertex_and_label_combinations.clear()
                 possible_vertex_and_label_combinations = self.get_vertex_and_label_combinations(b_vertices, c_model)
                 chosen_invalid_vertex_and_labels.clear()
@@ -342,7 +356,6 @@ class ModelSynthesis():
                 return None
 
             # remove combinations that made the model inconsistent
-            # TODO: FIX BUG:list.remove(x): x not in list
             if chosen_invalid_vertex_and_labels:
                 for invalid_combination in chosen_invalid_vertex_and_labels:
                     # all invalid combinations will eventually be removed from possible_vertex_and_label_combinations but not from chosen_invalid_vertex_and_labels until changes are applied
@@ -354,28 +367,33 @@ class ModelSynthesis():
                 return None
 
             vertex_and_label = random.choice(possible_vertex_and_label_combinations)          
-            (depth, row, col), chosen_label = vertex_and_label
-            c_model.set_with_tuple((depth, row, col), [chosen_label])
+            chosen_vertex, chosen_label = vertex_and_label
+            c_model.set_with_tuple(chosen_vertex, [chosen_label])
             # mark vertex as changed --> propagate changes with next C(M) update
-            c_model.u_t.append((depth,row,col))    
+            c_model.u_t.append(chosen_vertex)    
 
             # recalculate / update C(M)
             valid_c_model = c_model.update_c_model()
-            if valid_c_model and chosen_label != 0 and self.min_dimension_constraints:
+            c_model_consistent = c_model.check_consistent()
+            # print("C MODEL CONSISTENT? ")
+            # print(c_model_consistent)
+            if valid_c_model and c_model_consistent and self.min_dimension_constraints:
                 # apply dimension constraints
-                changed_vertices : set = self.apply_dim_constraints(c_model, (depth, row, col), chosen_label)
+                changed_vertices : set = self.apply_dim_constraints(c_model, chosen_vertex, chosen_label)
                 if changed_vertices is not None:
                     while(changed_vertices):
-                        chosen_vertex = changed_vertices.pop()
+                        chosen_changed_vertex = changed_vertices.pop()
                         # (chosen_depth, chosen_row, chosen_col) = changed_vertices.pop()
-                        chosen_changed_label = c_model.get_from_tuple(chosen_vertex)[0]
-                        new_changed_vertices : set = self.apply_dim_constraints(c_model, chosen_vertex, chosen_changed_label)
+                        chosen_changed_label = c_model.get_from_tuple(chosen_changed_vertex)[0]
+                        new_changed_vertices : set = self.apply_dim_constraints(c_model, chosen_changed_vertex, chosen_changed_label)
                         c_model_copy = copy.deepcopy(c_model.c_model)
                         valid_c_model = c_model.update_c_model()
                         if not valid_c_model:
                             c_model.c_model = c_model_copy
-                            c_model.remove_with_tuple(chosen_vertex, chosen_changed_label)
-                            if not c_model.get_from_tuple(chosen_vertex):
+                            c_model.remove_with_tuple(chosen_changed_vertex, chosen_changed_label)
+                            # c_model is again valid after resetting
+                            valid_c_model = True
+                            if not c_model.get_from_tuple(chosen_changed_vertex):
                                 # a consistent model cannot be created
                                 return None 
                         
@@ -423,6 +441,7 @@ class ModelSynthesis():
 
         return (count_positive_list, count_negative_list), fixed_labels_sum
 
+
     def check_dim_constraints_viable(self, c_model, vertex, label):
         dim_constraints_viable = True
 
@@ -467,10 +486,9 @@ class ModelSynthesis():
                 neighbor_vertex_list = []
 
                 # set as many labels as needed to ensure the constraint is fulfilled
-                for i in range(direction_constraint-1 - fixed_labels_sum):
-                    if i < 0:
-                        break
-                    
+                i = 0
+                while i < (direction_constraint-1 - fixed_labels_sum):
+                   
                     neighbor_vertex_list.clear()
                     # get adjacent vertices that have labels according to the constraint
                     if count_negative_list: neighbor_vertex_list.append(count_negative_list[0])
@@ -482,7 +500,9 @@ class ModelSynthesis():
 
                         # if the chosen neighbor already contains only one element then it does not count
                         if len(c_model.get_from_tuple(chosen_neighbor)) == 1:
-                            i -= 1
+                            # remove from correct side of vertex as the adjacent neighbors have changed or the neighbor vertex led to problems with min dimension constraint
+                            if chosen_neighbor in count_negative_list: count_negative_list.remove(chosen_neighbor)
+                            else: count_positive_list.remove(chosen_neighbor)
                             continue
                             
                         previous_labels = c_model.get_from_tuple(chosen_neighbor)
@@ -499,6 +519,8 @@ class ModelSynthesis():
                         # remove from correct side of vertex as the adjacent neighbors have changed or the neighbor vertex led to problems with min dimension constraint
                         if chosen_neighbor in count_negative_list: count_negative_list.remove(chosen_neighbor)
                         else: count_positive_list.remove(chosen_neighbor)
+
+                        i+=1
                     else:
                         # constraint cant be satisfied --> failure
                         return None    
@@ -508,11 +530,48 @@ class ModelSynthesis():
 
         return changed_vertices         
 
+
+    def check_min_dim_constraints_0_label(self, c_model : CModel, seed_vertex):
+        # if a 0 is the chosen label then check if min dimension constraint is viable for surrounding neighbor vertices
+        
+        changed_vertices = set()
+        range_list = [-1,1]
+        c_model_shape = (c_model.z_size, c_model.y_size, c_model.x_size)
+        for depth_offset in range_list:
+            for row_offset in range_list:
+                    for col_offset in range_list:
+                        offset = (depth_offset, row_offset, col_offset)
+                        neighbor_vertex = tuple(np.add(seed_vertex, offset))
+                        # check if neighbor vertex is within c_model
+                        if all(first_value < second_value and first_value >= 0 for first_value, second_value in zip(neighbor_vertex, c_model_shape)):
+                            neighbor_labels = set(c_model.get_from_tuple(neighbor_vertex))
+                            for neighbor_label in neighbor_labels:
+                                invalid_labels = []
+                                if neighbor_label != 0 and not self.check_dim_constraints_viable(c_model, neighbor_vertex, neighbor_label):
+                                    invalid_labels.append(neighbor_label)
+                            new_neighbor_labels = set([label for label in neighbor_labels if label not in invalid_labels])
+                            # check if there are remaining labels
+                            if not new_neighbor_labels:
+                                return None
+                            # check if the labels have changed
+                            if new_neighbor_labels.difference(neighbor_labels):
+                                c_model.set_with_tuple(neighbor_vertex, new_neighbor_labels)
+                                changed_vertices.add(neighbor_vertex)
+                
+        return changed_vertices
+
     def apply_dim_constraints(self, c_model : CModel, seed_vertex, label):
+        changed_vertices = set()
+        
+        # if a 0 was set then check if min dimension constraint viable for surrounding neighbor vertices
+        if label == 0:
+            changed_vertices = self.check_min_dim_constraints_0_label(c_model, seed_vertex)
+            return changed_vertices
+
+        
         width_constraint = self.min_dimension_constraints[label]["width"]
         height_constraint = self.min_dimension_constraints[label]["height"]
         depth_constraint = self.min_dimension_constraints[label]["depth"]
-        changed_vertices = set()
 
         changed_vertices_width_direction = self.apply_dim_constraint_in_direction(c_model, seed_vertex, label, width_constraint, (0,0,1))
         if changed_vertices_width_direction is None:
@@ -527,145 +586,7 @@ class ModelSynthesis():
         changed_vertices_depth_direction = self.apply_dim_constraint_in_direction(c_model, seed_vertex, label, depth_constraint, (1,0,0))
         if changed_vertices_depth_direction is None:
             return None
-        changed_vertices.update(changed_vertices_depth_direction)
-        # if width_constraint > 1:
-        #     (count_right_list, count_left_list), fixed_labels_sum = self.find_adjacent_vertices_with_dim_constraints(c_model, seed_vertex, label, (0,0,1))
-        #     # check in x direction (to the left and right)
-        #     # count_right_list, fixed_labels_right = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,1))
-        #     # count_left_list, fixed_labels_left = self.check_label_in_direction(c_model, seed_vertex, label, (0,0,-1))
-        #     # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
-        #     neighbor_vertex_sum = len(count_left_list) + len(count_right_list)
-        #     # fixed_labels_sum = fixed_labels_left + fixed_labels_right
-        #     if neighbor_vertex_sum + 1 >= width_constraint: 
-        #         # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
-        #         if fixed_labels_sum + 1 < width_constraint or ((count_left_list and len(c_model.get_from_tuple(count_left_list[0])) > 1) or (count_right_list and len(c_model.get_from_tuple(count_right_list[0])) > 1)):
-        #             neighbor_vertex_list = []
-
-        #             # set as many labels as needed to ensure the constraint is fulfilled
-        #             for i in range(width_constraint-1 - fixed_labels_sum):
-        #                 if i < 0:
-        #                     break
-
-        #                 # get adjacent vertices that have labels according to the constraint
-        #                 if count_left_list: neighbor_vertex_list.append(count_left_list[0])
-        #                 if count_right_list: neighbor_vertex_list.append(count_right_list[0]) 
-
-        #                 # check if there even exist vertices that can fullfil the constraint
-        #                 if neighbor_vertex_list:
-        #                     chosen_neighbor = random.choice(neighbor_vertex_list)
-
-        #                     # if the chosen neighbor already contains only one element then it does not count
-        #                     if len(c_model.get_from_tuple(chosen_neighbor)) == 1:
-        #                         i -= 1
-        #                         continue
-                                
-        #                     previous_labels = c_model.get_from_tuple(chosen_neighbor)
-        #                     c_model.set_with_tuple(chosen_neighbor, [label])
-        #                     # check if c_model vertices around the chosen neighbor can fulfill min dimension constraint
-        #                     if self.check_dim_constraints_viable(c_model, chosen_neighbor, label):
-        #                         c_model.u_t.append(chosen_neighbor)
-        #                         changed_vertices.add(chosen_neighbor)
-        #                     else:
-        #                         # reset labels as min dimension constraint can not be fulfilled
-        #                         c_model.set_with_tuple(chosen_neighbor, previous_labels)
-        #                         i -= 1
-
-        #                     # remove from correct side of vertex as the adjacent neighbors have changed or the neighbor vertex led to problems with min dimension constraint
-        #                     if chosen_neighbor in count_left_list: count_left_list.remove(chosen_neighbor)
-        #                     else: count_right_list.remove(chosen_neighbor)
-        #                 else:
-        #                     # constraint cant be satisfied --> failure
-        #                     return None    
-        #     else:
-        #             # constraint cant be satisfied --> failure
-        #             return None                     
-
-        # if height_constraint > 1:
-        #     # check in y direction 
-        #     count_top_list, fixed_labels_top = self.check_label_in_direction(c_model, seed_vertex, label, (0,-1,0))
-        #     count_bottom_list, fixed_labels_bottom = self.check_label_in_direction(c_model, seed_vertex, label, (0,1,0))
-        #     # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
-        #     neighbor_vertex_sum = len(count_top_list) + len(count_bottom_list)
-        #     fixed_labels_sum = fixed_labels_bottom + fixed_labels_top
-        #     if neighbor_vertex_sum + 1 >= height_constraint: 
-        #         # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
-        #         if fixed_labels_sum + 1 < height_constraint or ((count_top_list and len(c_model.get_from_tuple(count_top_list[0])) > 1) or (count_bottom_list and len(c_model.get_from_tuple(count_bottom_list[0])) > 1)):
-        #             neighbor_vertex_list = []
-                    
-        #             # set as many labels as needed to ensure the constraint is fulfilled
-        #             for i in range(height_constraint-1 - fixed_labels_sum):
-        #                 if i < 0:
-        #                     break
-
-        #                 # get adjacent vertices that have labels according to the constraint
-        #                 if count_top_list: neighbor_vertex_list.append(count_top_list[0])
-        #                 if count_bottom_list: neighbor_vertex_list.append(count_bottom_list[0]) 
-
-        #                 # check if there even exist vertices that can fullfil the constraint
-        #                 if neighbor_vertex_list:
-        #                     chosen_neighbor = random.choice(neighbor_vertex_list)
-
-        #                     # if the chosen neighbor already contains only one element then it does not count
-        #                     if len(c_model.get_from_tuple(chosen_neighbor)) == 1:
-        #                         i -= 1
-        #                         continue
-                        
-        #                     c_model.set_with_tuple(chosen_neighbor, [label])
-        #                     c_model.u_t.append(chosen_neighbor)
-        #                     changed_vertices.add(chosen_neighbor)
-        #                     # remove from correct side of vertex as the adjacent neighbors have changed
-        #                     if chosen_neighbor in count_top_list: count_top_list.remove(chosen_neighbor)
-        #                     else: count_bottom_list.remove(chosen_neighbor)
-        #                 else:
-        #                     # constraint cant be satisfied --> failure
-        #                     return None     
-        #     else:
-        #             # constraint cant be satisfied --> failure
-        #             return None                 
-                
-        
-        # if depth_constraint > 1:
-        #     # check in y direction 
-        #     count_front_list, fixed_labels_front = self.check_label_in_direction(c_model, seed_vertex, label, (-1,0,0))
-        #     count_back_list, fixed_labels_back = self.check_label_in_direction(c_model, seed_vertex, label, (1,0,0))
-        #     # enforce label onto vertices if minimum dimension constraint can only be achieved by enforcing
-        #     neighbor_vertex_sum = len(count_front_list) + len(count_back_list)
-        #     fixed_labels_sum = fixed_labels_back + fixed_labels_front
-        #     if neighbor_vertex_sum + 1 >= depth_constraint: 
-        #         # check if there are not enough fixed labels set or the adjacent neighbors are do not have fixed labels (fixed = only one label)
-        #         if fixed_labels_sum + 1 < depth_constraint or ((count_front_list and len(c_model.get_from_tuple(count_front_list[0])) > 1) or (count_back_list and len(c_model.get_from_tuple(count_back_list[0])) > 1)):
-        #             neighbor_vertex_list = []
-                
-        #             # set as many labels as needed to ensure the constraint is fulfilled
-        #             for i in range(depth_constraint-1 - fixed_labels_sum):
-        #                 if i < 0:
-        #                     break
-
-        #                 # get adjacent vertices that have labels according to the constraint
-        #                 if count_front_list: neighbor_vertex_list.append(count_front_list[0])
-        #                 if count_back_list: neighbor_vertex_list.append(count_back_list[0]) 
-
-        #                 # check if there even exist vertices that can fullfil the constraint
-        #                 if neighbor_vertex_list:
-        #                     chosen_neighbor = random.choice(neighbor_vertex_list)
-
-        #                     # if the chosen neighbor already contains only one element then it does not count
-        #                     if len(c_model.get_from_tuple(chosen_neighbor)) == 1:
-        #                         i -= 1
-        #                         continue
-                        
-        #                     c_model.set_with_tuple(chosen_neighbor, [label])
-        #                     c_model.u_t.append(chosen_neighbor)
-        #                     changed_vertices.add(chosen_neighbor)
-        #                     # remove from correct side of vertex as the adjacent neighbors have changed
-        #                     if chosen_neighbor in count_front_list: count_front_list.remove(chosen_neighbor)
-        #                     else: count_back_list.remove(chosen_neighbor)
-        #                 else:
-        #                     # constraint cant be satisfied --> failure
-        #                     return None  
-        #     else:
-        #             # constraint cant be satisfied --> failure
-        #             return None                
+        changed_vertices.update(changed_vertices_depth_direction)          
                         
         return changed_vertices
   
@@ -759,10 +680,10 @@ class ModelSynthesis():
             for y in range(model.y_size):
                 for x in range(model.x_size):
                     if not self.check_transition_consistent(model, (z, y, x)):
-                        print("MODEL INCONSISTENT")
+                        # print("MODEL INCONSISTENT")
                         return False
 
-        print("Model is consistent")
+        # print("Model is consistent")
         return True
 
     def check_transition_consistent(self, model : Model, v1):

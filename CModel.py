@@ -6,7 +6,7 @@ class CModel():
     # C(M) is the model M but with every possible/allowed label per vertex
     # therefore every vertex has a list of labels
     
-    def __init__(self, model_list, valid_label_list, transition_rules, b_vertices, valid_boundary_labels):
+    def __init__(self, model_list, valid_label_list, transition_rules, b_vertices = None, valid_boundary_labels = None, set_fixed_values = True):
         # B model part with neighbors
         self.incomplete_b_model = model_list
         if not isinstance(model_list, np.ndarray):
@@ -39,10 +39,12 @@ class CModel():
         self.u_t = None
 
         # respect already fixed value from the final output model
-        self._set_fixed_values_from_model_in_c_model()
+        if set_fixed_values:
+            self._set_fixed_values_from_model_in_c_model()
 
         # find initial changed vertices and set them to self.u_t
-        self.border_u_t, self.u_t = self._find_initial_changed_vertices(b_vertices)
+        if b_vertices:
+            self.border_u_t, self.u_t = self._find_initial_changed_vertices(b_vertices)
 
         # apply boundary constraints if given
         if valid_boundary_labels:
