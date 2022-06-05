@@ -13,10 +13,11 @@ class ModelSynthesis():
     def __init__(self, example_model : Model, output_model_size : tuple, grow_from_initial_seed = False, base_mode_ground_layer_value :int = None, boundary_constraints_location={}, apply_min_dimension_constraints = False):
         self.example_model = example_model
         self.output_model_size = output_model_size
+        self.model_2d = True if len(example_model.model) == 1 else False
         self.grow_from_initial_seed = grow_from_initial_seed
         # create empty output model
         # output_model_size[2] columns, output_model_size[1] row, output_model_size[0] depth
-        self.base_output_model = Model(np.zeros(output_model_size, int))
+        self.base_output_model = Model(np.zeros(output_model_size, int), self.model_2d)
         # change bottom rows of base output model to 1
         if base_mode_ground_layer_value:
             ground_layer_row = np.full((1, self.base_output_model.x_size), base_mode_ground_layer_value, int)
@@ -173,7 +174,7 @@ class ModelSynthesis():
     # wrapper method
     def run(self, b_size = 4, plot_model = False):
         # in case of plot model the given output depth must be even
-        if plot_model and self.output_model_size[0] % 2:
+        if plot_model and self.output_model_size[0] % 2 and not self.model_2d:
             print("As plot model was true the output model size in depth direction must be even")
             return None
         
@@ -222,7 +223,9 @@ class ModelSynthesis():
         inconsistent_model_count = 0
 
         # check if given b size is too large for output model with given size
-        if any([b_size >= x for x in (input_model.z_size, input_model.y_size, input_model.y_size)]):
+        relevant_dimensions = (input_model.z_size, input_model.y_size, input_model.y_size)
+        if self.model_2d : relevant_dimensions = (input_model.y_size, input_model.y_size)
+        if any([b_size >= x for x in relevant_dimensions]):
             print("The B region size is too large compared to the output model size")
             return None
 
@@ -240,6 +243,8 @@ class ModelSynthesis():
             for k in range(depth_steps + 1):  
                 start_vertex = (k * depth_step_size, input_model.y_size - b_size, 0)
                 end_vertex = (b_size - 1 + k * depth_step_size, start_vertex[1] + b_size - 1, b_size - 1)
+                if self.model_2d:
+                    end_vertex = (0, end_vertex[1], end_vertex[2])
                 
                 # column direction
                 for j in range(horizontal_steps + 1):  
@@ -365,6 +370,8 @@ class ModelSynthesis():
             c_model_consistent = c_model.check_consistent()
             # print("C MODEL CONSISTENT? ")
             # print(c_model_consistent)
+
+            # apply dimensional constraints
             if valid_c_model and c_model_consistent and self.min_dimension_constraints:
                 # apply dimension constraints
                 changed_vertices : set = self.apply_dim_constraints(c_model, chosen_vertex, chosen_label)
@@ -762,9 +769,10 @@ class ModelSynthesis():
 
     def plot_model(self, working_model : Model):
         # plot the 2D model with colored rectangles
-        color_list = ["black", "green", "blue", "yellow", "violet", "cyan", "gray", "brown"]
+        color_list = ["black", "green", "blue", "yellow", "violet", "cyan", "gray", "brown", "orange", "red", "indigo"]
 
         horizontal_plot_number = int(working_model.z_size / 2)
+        if horizontal_plot_number == 0: horizontal_plot_number = 1
         vertical_plot_number = int(working_model.z_size / horizontal_plot_number) 
         fig, axs = plt.subplots(vertical_plot_number, horizontal_plot_number, squeeze=False)
 
@@ -827,51 +835,89 @@ if __name__ == "__main__":
     #                 ]
     
     # world like model with ground plane and basic structures
-    example_model = [
-                        [
-                            [0, 0, 0, 0],
-                            [0, 0, 0, 0],
-                            [0, 0, 0, 0],
-                            [0, 0, 0, 0],
-                            [4, 4, 4, 4]
-                        ],
-                        [
-                            [0, 0, 0, 0],
-                            [0, 3, 3, 0],
-                            [5, 2, 2, 6],
-                            [0, 2, 2, 0],
-                            [4, 4, 4, 4]
-                        ],
-                        [
-                            [0, 0, 0, 0],
-                            [0, 3, 3, 0],
-                            [0, 2, 2, 0],
-                            [0, 2, 2, 0],
-                            [4, 4, 4, 4]
-                        ],
-                        [
-                            [0, 0, 0, 0],
-                            [0, 3, 3, 0],
-                            [0, 2, 2, 0],
-                            [0, 2, 2, 0],
-                            [4, 4, 4, 4]
-                        ],
-                        # [
-                        #     [0, 0, 0, 0],
-                        #     [1, 2, 3, 1],
-                        #     [0, 2, 3, 0],
-                        #     [0, 1, 0, 0],
-                        #     [1, 0, 0, 1]
-                        # ],
-                        [
-                            [0, 0, 0, 0],
-                            [0, 0, 0, 0],
-                            [0, 0, 0, 0],
-                            [0, 0, 0, 0],
-                            [4, 4, 4, 4]
-                        ]
-                    ]
+    # example_model = [
+    #                     [
+    #                         [0, 0, 0, 0],
+    #                         [0, 0, 0, 0],
+    #                         [0, 0, 0, 0],
+    #                         [0, 0, 0, 0],
+    #                         [4, 4, 4, 4]
+    #                     ],
+    #                     [
+    #                         [0, 0, 0, 0],
+    #                         [0, 3, 3, 0],
+    #                         [5, 2, 2, 6],
+    #                         [0, 2, 2, 0],
+    #                         [4, 4, 4, 4]
+    #                     ],
+    #                     [
+    #                         [0, 0, 0, 0],
+    #                         [0, 3, 3, 0],
+    #                         [0, 2, 2, 0],
+    #                         [0, 2, 2, 0],
+    #                         [4, 4, 4, 4]
+    #                     ],
+    #                     [
+    #                         [0, 0, 0, 0],
+    #                         [0, 3, 3, 0],
+    #                         [0, 2, 2, 0],
+    #                         [0, 2, 2, 0],
+    #                         [4, 4, 4, 4]
+    #                     ],
+    #                     # [
+    #                     #     [0, 0, 0, 0],
+    #                     #     [1, 2, 3, 1],
+    #                     #     [0, 2, 3, 0],
+    #                     #     [0, 1, 0, 0],
+    #                     #     [1, 0, 0, 1]
+    #                     # ],
+    #                     [
+    #                         [0, 0, 0, 0],
+    #                         [0, 0, 0, 0],
+    #                         [0, 0, 0, 0],
+    #                         [0, 0, 0, 0],
+    #                         [4, 4, 4, 4]
+    #                     ]
+    #                 ]
+    # example_model = [
+    #                     [
+    #                         [0, 0, 0, 0, 0],
+    #                         [0, 0, 0, 0, 0],
+    #                         [0, 0, 0, 0, 0],
+    #                         [0, 0, 0, 0, 0]
+    #                     ],
 
+    #                     [
+    #                         [0, 0, 0, 0, 0],
+    #                         [0, 2, 1, 4, 0],
+    #                         [0, 2, 3, 4, 0],
+    #                         [0, 0, 0, 0, 0]
+    #                     ],
+    #                     [
+    #                         [0, 0, 0, 0, 0],
+    #                         [0, 2, 1, 4, 0],
+    #                         [0, 2, 3, 4, 0],
+    #                         [0, 0, 0, 0, 0]
+    #                     ],
+    #                     [
+    #                         [0, 0, 0, 0, 0],
+    #                         [0, 0, 0, 0, 0],
+    #                         [0, 0, 0, 0, 0],
+    #                         [0, 0, 0, 0, 0]
+    #                     ]
+    #                 ]
+
+    # example 2D model
+    example_model = [
+        [
+        [0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 4, 3, 2, 0],
+        [0, 0, 0, 4, 5, 2, 0],
+        [0, 0, 1, 6, 5, 7, 0],
+        [0, 0, 1, 6, 8, 7, 0],
+        [0, 0, 0, 0, 0, 0, 0]
+    ]
+    ]
     model = Model(example_model)
     boundary_constraints_location = {
         "top": True,
@@ -882,5 +928,5 @@ if __name__ == "__main__":
         "back": True
     }
     # depth, rows, columns
-    model_synthesis_object = ModelSynthesis(model, (6, 8, 20), grow_from_initial_seed=False, base_mode_ground_layer_value=4, boundary_constraints_location = boundary_constraints_location, apply_min_dimension_constraints = True)
+    model_synthesis_object = ModelSynthesis(model, (1, 8, 10), grow_from_initial_seed=False, base_mode_ground_layer_value=None, boundary_constraints_location = boundary_constraints_location, apply_min_dimension_constraints = True)
     model_synthesis_object.run(4, plot_model=True)
