@@ -171,7 +171,7 @@ class ModelSynthesis():
         return min_dimension_size_per_label
 
     # wrapper method
-    def run(self, b_size = 4, zero_padding = False, plot_model = False):
+    def run(self, b_size = 4, plot_model = False):
         # in case of plot model the given output depth must be even
         if plot_model and self.output_model_size[0] % 2:
             print("As plot model was true the output model size in depth direction must be even")
@@ -181,7 +181,7 @@ class ModelSynthesis():
         i = 0
         while(i < number_of_attempts):
             print("Trying Synthesis ({}/{})".format(i, number_of_attempts))
-            output_model = self.run_synthesis(b_size, zero_padding, plot_model)
+            output_model = self.run_synthesis(b_size, plot_model)
             if output_model: 
                 print("A working model was found!")
                 return output_model
@@ -191,7 +191,7 @@ class ModelSynthesis():
         print("A consistent model could not be generated in time with given constraints. Try again")
         return None
     
-    def run_synthesis(self, b_size = 4, zero_padding = False, plot_model = False):       
+    def run_synthesis(self, b_size = 4, plot_model = False):       
         # start with inputting the initial base output model (all zeros)
         input_model = self.base_output_model
 
@@ -230,9 +230,13 @@ class ModelSynthesis():
         # do the synthesize procedure with moving B over all of the model more than once
         max_repetitions = 3
         # +1 because the initial position is not respected within the various step sizes
-        max_b_movements = max_repetitions * (depth_step_size+1) * (horizontal_step_size+1) * (vertical_step_size+1)
+        max_b_movements = max_repetitions * (depth_steps+1) * (horizontal_steps+1) * (vertical_steps+1)
         iteration = 1
+
+        # repetitions of moving B all over the model
         for repetition in range(max_repetitions):
+
+            # depth direction
             for k in range(depth_steps + 1):  
                 start_vertex = (k * depth_step_size, input_model.y_size - b_size, 0)
                 end_vertex = (b_size - 1 + k * depth_step_size, start_vertex[1] + b_size - 1, b_size - 1)
@@ -242,22 +246,10 @@ class ModelSynthesis():
                     start_vertex = (start_vertex[0], input_model.y_size - b_size, j * horizontal_step_size)
                     end_vertex = (end_vertex[0], start_vertex[1] + b_size - 1, b_size - 1 + j * horizontal_step_size)
                     
-                    used_start_vertex = start_vertex
-                    used_end_vertex = end_vertex
                     # row direction
                     for i in range(vertical_steps + 1):
-                        if zero_padding:
-                            used_start_vertex = list(start_vertex)
-                            for index, value in enumerate(used_start_vertex):
-                                if value == 0:
-                                    used_start_vertex[index] = 1
-                            used_start_vertex = tuple(used_start_vertex)
-                            
-                            used_end_vertex = list(end_vertex)
-                            for index, value in enumerate(used_end_vertex):
-                                if value == self.output_model_size[index] - 1:
-                                    used_end_vertex[index] = value - 1
-                            used_end_vertex = tuple(used_end_vertex)
+                        used_start_vertex = (start_vertex[0], start_vertex[1] - vertical_step_size * i, start_vertex[2])
+                        used_end_vertex = (end_vertex[0], end_vertex[1] - vertical_step_size * i, end_vertex[2])
 
                         print("B was moved: Iteration ({}/{})".format(iteration, max_b_movements))
                         iteration += 1
@@ -272,10 +264,6 @@ class ModelSynthesis():
                             input_model = working_model
                             working_model_list.append(working_model)
                             # print("MODEL CONSISTENT: {}".format(self.check_model_consistent(working_model)))
-
-                        # update start and end vertex for next B region
-                        start_vertex = (start_vertex[0], start_vertex[1] - vertical_step_size, start_vertex[2])
-                        end_vertex = (end_vertex[0], end_vertex[1] - vertical_step_size, end_vertex[2])  
 
         if working_model_list:
             working_model = working_model_list[-1]
@@ -429,7 +417,6 @@ class ModelSynthesis():
         chosen_label = random.choice(valid_labels) 
         return vertex, chosen_label
 
-
     def find_adjacent_vertices_with_dim_constraints(self, c_model, vertex, label, positive_offset):
         # check for giving vertex if all dim constraints can be fulfilled
         negative_offset = tuple([-value for value in positive_offset])
@@ -440,7 +427,6 @@ class ModelSynthesis():
         fixed_labels_sum = fixed_labels_left + fixed_labels_right  
 
         return (count_positive_list, count_negative_list), fixed_labels_sum
-
 
     def check_dim_constraints_viable(self, c_model, vertex, label):
         dim_constraints_viable = True
@@ -529,7 +515,6 @@ class ModelSynthesis():
                 return None     
 
         return changed_vertices         
-
 
     def check_min_dim_constraints_0_label(self, c_model : CModel, seed_vertex):
         # if a 0 is the chosen label then check if min dimension constraint is viable for surrounding neighbor vertices
@@ -853,7 +838,7 @@ if __name__ == "__main__":
                         [
                             [0, 0, 0, 0],
                             [0, 3, 3, 0],
-                            [0, 2, 2, 0],
+                            [5, 2, 2, 6],
                             [0, 2, 2, 0],
                             [4, 4, 4, 4]
                         ],
@@ -897,5 +882,5 @@ if __name__ == "__main__":
         "back": True
     }
     # depth, rows, columns
-    model_synthesis_object = ModelSynthesis(model, (6, 8, 5), grow_from_initial_seed=False, base_mode_ground_layer_value=4, boundary_constraints_location = boundary_constraints_location, apply_min_dimension_constraints = True)
-    model_synthesis_object.run(4, zero_padding=False, plot_model=True)
+    model_synthesis_object = ModelSynthesis(model, (6, 8, 20), grow_from_initial_seed=False, base_mode_ground_layer_value=4, boundary_constraints_location = boundary_constraints_location, apply_min_dimension_constraints = True)
+    model_synthesis_object.run(4, plot_model=True)
